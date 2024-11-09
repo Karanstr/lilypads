@@ -106,12 +106,11 @@ pub struct MemHeap<T:Clone> {
 impl<T:Clone> MemHeap<T> {
 
     /// Constructs a new `MemHeap` which can store data of type `T` 
-    /// # Examples
-    /// `
+    /// # Example
+    /// ```
     /// //Stores u32's in each index.
-    /// 
     /// let mut mem_heap:MemHeap<u32> = MemHeap::new();
-    /// `
+    /// ```
     pub fn new() -> Self {
         Self {
             memory : Vec::new(),
@@ -301,8 +300,8 @@ impl<T:Clone> MemHeap<T> {
     /// 
     /// Protection can be removed with a call to [MemHeap::expose], which will unfreeze the data's ownership tracking.
     /// If you don't intend to re[MemHeap::protect] the data, please either garbage collect with [MemHeap::free_if_dangling] or give it an owner with [MemHeap::add_owner].
-    /// Remember: **Owners should correlate to locations an [Index] is stored**. DO NOT just call [MemHeap::add_owner] and forget about it unless you want to deal with memory leakage.
-    /// 
+    ///
+    ///  Remember: **Owners should correlate to locations an [Index] is stored**. DO NOT just call [MemHeap::add_owner] and forget about it unless you want to deal with memory leakage.
     /// Once you recieve the index the data was stored at, it is your responsibility to manage it's owners.
     pub fn push(&mut self, data:T, protected:bool) -> Index {
         let index = if protected { self.reserve_protected() } else { self.reserve_index() };
