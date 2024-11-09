@@ -7,3 +7,5 @@ There should be two major reworks before this project is considered 'complete' (
 - Adding multiple 'buckets' to hold data of different sizes to minimize fragmentation.
 
 These changes could come in any order, at any time, so I wouldn't rely on this unless you're me until it hits version 1.
+
+Docs: https://docs.rs/vec_mem_heap/0.1.3/vec_mem_heap/
