@@ -5,19 +5,75 @@
 //! 
 //! Effectively a custom implementation of [std::rc] with a focus on streamlining the creation of a large number of shared-ownership data and ensuring all of that data is stored (more or less) contiguously in memory. Data is stored in a [Vec] (until I learn how to handle raw memory), and [Index]es are used to read and write.
 //! 
-//! Insert an example here: (Note to self)
+//! # Example
+//! ```
+//! use vec_mem_heap::*;
+//! 
+//! fn main() {
+//! 
+//!     let mut mem_heap : MemHeap<u32> = MemHeap::new();
+//! 
+//!     let data1 = mem_heap.push(15, false); //data1 == Index(0)
+//!     //Normally you'd write matches here to catch AccessErrors, but that's a lot of writing I don't want to do
+//!     _ = mem_heap.add_owner(data1);
+//!
+//!     {
+//!         let data2 = mem_heap.push(72, false); // data2 == Index(1)
+//!         //Index derives copy, so it can be passed around as parameters without worrying about references/ownership.
+//!         _ = mem_heap.add_owner(data2);
+//! 
+//!         let data3 = mem_heap.push(7, true); // data3 == Index(2)
+//!         //The data located at data3 (Index(2)) is protected, meaning calling add_owner will result in an AccessError::ProtectedMemory, which can be caught with a match
+//!         match mem_heap.add_owner(data3) {
+//!             Ok(_) => {
+//!                 //Whatever
+//!             },
+//!             Err(AccessError:ProtectedMemory(_)) => println!("Attempted to modify protected memory"),
+//!             Err(error) => _ = dbg!(error),
+//!         }
+//! 
+//!         let data4 = data1;
+//!         //The value stored in mem_heap.data(Index(0)) now has two owners.
+//!         _ = mem_heap.add_owner(data4);
+//!     
+//!         //data2, data3, and data4 are about to go out of scope, so we have to manually remove them as owners.
+//!         //Ok( Some(72) ) -> The data at Index(1) only had one owner, so it was collected
+//!         _ = mem_heap.remove_owner(data2);
+//!         // Err( AccessError::ProtectedMemory( Index(2) ) ) -> The data at Index(2) was protected, we can't modify its owner_count
+//!         _ = mem_heap.remove_owner(data3); 
+//!         // Ok( None ) -> The data at Index(0) had two owners, now has one owner. Nothing needs to be done
+//!         _ = mem_heap.remove_owner(data4); 
+//!     }
+//!     // Ok( &15 ) -> The data at Index(0) still has one owner (data1). If the data didn't derive copy, we would recieve &data instead.
+//!     _ = dbg!( mem_heap.data( Index(0) ) );
+//!     // Err( AccessError::FreeMemory(Index(1)) ) -> The data at Index(1) was garbage collected when its final owner was removed
+//!     _ = dbg!( mem_heap.data( Index(1) ) );
+//! 
+//! }
+//! ```
 
 use std::ops::Deref;
+
+/// A [new_type](<https://doc.rust-lang.org/rust-by-example/generics/new_types.html>) used to help prevent improper access to memory.
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy, Hash, Eq)]
+pub struct Index(pub usize);
+impl Deref for Index {
+    type Target = usize;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 
 /// A collection of errors which may occur while handling memory.
 #[derive(Debug)]
 pub enum AccessError {
     /// Returned when attempting to access an index beyond the length of [MemHeap]'s internal storage
-    OutOfBoundsMemory(usize),
+    OutOfBoundsMemory(Index),
     /// Returned when attempting to access an index marked as protected
-    ProtectedMemory(usize),
+    ProtectedMemory(Index),
     /// Returned when attempting to access an index which isn't currently allocated
-    FreeMemory(usize),
+    FreeMemory(Index),
     /// Returned when attempting to do something which isn't supported
     InvalidRequest,
 }
@@ -79,17 +135,6 @@ mod owner_tracking {
 
 }
 
-/// A [new_type](<https://doc.rust-lang.org/rust-by-example/generics/new_types.html>) used to help prevent improper access to memory.
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy, Hash, Eq)]
-pub struct Index(pub usize);
-impl Deref for Index {
-    type Target = usize;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-
 pub use owner_tracking::Ownership;
 use owner_tracking::Steward;
 
@@ -133,10 +178,10 @@ impl<T:Clone> MemHeap<T> {
 
     fn mut_wrapper(&mut self, index:Index) -> Result<&mut Steward<T>, AccessError> {
         match index {
-            bad_index if index >= self.upper_bound() => Err( AccessError::OutOfBoundsMemory(*bad_index) ),
-            protected_index if self.is_protected(protected_index) => Err( AccessError::ProtectedMemory(*protected_index) ),
+            bad_index if index >= self.upper_bound() => Err( AccessError::OutOfBoundsMemory(bad_index) ),
+            protected_index if self.is_protected(protected_index) => Err( AccessError::ProtectedMemory(protected_index) ),
             index => match &mut self.memory[*index] {
-                None => Err( AccessError::FreeMemory(*index) ),
+                None => Err( AccessError::FreeMemory(index) ),
                 Some(tracker) => Ok(tracker)
             }
         }
@@ -144,9 +189,9 @@ impl<T:Clone> MemHeap<T> {
 
     fn wrapper(&self, index:Index) -> Result<&Steward<T>, AccessError> {
         match index {
-            bad_index if index >= self.upper_bound() => Err( AccessError::OutOfBoundsMemory(*bad_index) ),
+            bad_index if index >= self.upper_bound() => Err( AccessError::OutOfBoundsMemory(bad_index) ),
             index => match &self.memory[*index] {
-                None => Err( AccessError::FreeMemory(*index) ),
+                None => Err( AccessError::FreeMemory(index) ),
                 Some(tracker) => Ok(tracker)
             }
         }
@@ -203,7 +248,7 @@ impl<T:Clone> MemHeap<T> {
         }
     }
 
-    /// Protects a piece of data, ensuring it's ownership tracking won't be altered and the data won't be garbage collected by any of the following:
+    /// Protects a piece of data, ensuring its ownership tracking won't be altered and the data won't be garbage collected by any of the following:
     /// - [MemHeap::add_owner]
     /// - [MemHeap::remove_owner]
     /// - [MemHeap::remove_memory_leaks]
@@ -302,7 +347,7 @@ impl<T:Clone> MemHeap<T> {
     /// If you don't intend to re[MemHeap::protect] the data, please either garbage collect with [MemHeap::free_if_dangling] or give it an owner with [MemHeap::add_owner].
     ///
     ///  Remember: **Owners should correlate to locations an [Index] is stored**. DO NOT just call [MemHeap::add_owner] and forget about it unless you want to deal with memory leakage.
-    /// Once you recieve the index the data was stored at, it is your responsibility to manage it's owners.
+    /// Once you recieve the index the data was stored at, it is your responsibility to manage its owners.
     pub fn push(&mut self, data:T, protected:bool) -> Index {
         let index = if protected { self.reserve_protected() } else { self.reserve_index() };
         self.memory[*index] = Some( Steward::new(data) );
