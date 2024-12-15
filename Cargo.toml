@@ -1,6 +1,6 @@
 [package]
 name = "vec_mem_heap"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2021"
 description = "A probably bad memory allocator wrapped in Rust's Vec<> because I don't know how to handle raw memory yet."
 repository = "https://github.com/Karanstr/vec_mem_heap"

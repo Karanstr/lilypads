@@ -370,8 +370,8 @@ impl<T:Clone> MemHeap<T> {
     }
 
     /// Returns an immutable reference to the internal memory Vec
-    /// to enable profiling on memory usage.
-    pub fn profile(&self) -> &Vec< Option< Steward<T> > > {
+    /// to allow the user finer control over memory organization.
+    pub fn peek(&self) -> &Vec< Option< Steward<T> > > {
         &self.memory
     } 
 
