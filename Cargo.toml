@@ -7,3 +7,4 @@ repository = "https://github.com/Karanstr/vec_mem_heap"
 license = "MIT"
 
 [dependencies]
+serde = { version = "1.0", features = ["derive"] }

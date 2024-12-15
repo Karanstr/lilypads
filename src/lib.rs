@@ -53,9 +53,10 @@
 //! ```
 
 use std::ops::Deref;
+use serde::{Serialize, Deserialize};
 
 /// A [new_type](<https://doc.rust-lang.org/rust-by-example/generics/new_types.html>) used to help prevent improper access to memory.
-#[derive(Debug, PartialEq, PartialOrd, Clone, Copy, Hash, Eq)]
+#[derive(Debug, PartialEq, PartialOrd, Clone, Copy, Hash, Eq, Serialize, Deserialize)]
 pub struct Index(pub usize);
 impl Deref for Index {
     type Target = usize;
@@ -80,6 +81,7 @@ pub enum AccessError {
 
 
 mod owner_tracking {
+    use serde::{Serialize, Deserialize};
 
     #[derive(PartialEq)]
     /// The current status of data ownership
@@ -90,6 +92,7 @@ mod owner_tracking {
         Dangling,
     }
     
+    #[derive(Debug, Serialize, Deserialize)]
     pub struct Steward<T> {
         pub data : T,
         owner_count:usize,
@@ -139,6 +142,7 @@ pub use owner_tracking::Ownership;
 use owner_tracking::Steward;
 
 /// Used to allocate space on the stack, read from that space, and write to it.
+#[derive(Serialize, Deserialize)]
 pub struct MemHeap<T:Clone> {
     /// The container used to manage allocated memory
     memory:Vec< Option< Steward< T > > >,
@@ -314,10 +318,7 @@ impl<T:Clone> MemHeap<T> {
     /// 3. Free the data using [MemHeap::free_if_dangling]
     pub fn remove_owner(&mut self, index:Index) -> Result<Option<T>, AccessError> {
         if let Ownership::Dangling = self.mut_wrapper(index)?.modify_owners(-1)? {
-            match self.free_index(index) {
-                Some(data) => Ok( Some(data) ),
-                None => Ok(None)
-            }
+            Ok( self.free_index(index) )
         } else { Ok(None) }
     }
 
@@ -375,3 +376,4 @@ impl<T:Clone> MemHeap<T> {
     } 
 
 }
+
