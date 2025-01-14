@@ -1,4 +1,4 @@
-// #![warn(missing_docs)]
+#![warn(missing_docs)]
 //! Silly virtual memory allocator.
 //! 
 //! This is a learning experience for me and should be used with a mountain of salt.
@@ -46,10 +46,13 @@
 
 use serde::{Serialize, Deserialize};
 
+///A trait which allows you to customize how indexes are stored on the other side of the api
 pub trait Indexable {
+    ///Allows the library to convert your type to its internal [Index] representation
     fn index(&self) -> usize;
 }
 
+///A newtype wrapper to represent indexes, the default implementation if you don't want to create your own [Indexable]
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Index(usize);
@@ -84,16 +87,19 @@ pub enum Ownership {
     Dangling,
 }
 
+/// Stores some data and the number of references to it
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Steward<T> {
     data : T,
     rc : RefCount,
 }
+
+/// Tracks the number of references to a piece of data have been handed out and not revoked
 #[derive(Debug, Serialize, Deserialize)]
 #[repr(transparent)]
-struct RefCount(usize);
+pub struct RefCount(pub usize);
 impl RefCount {
-    pub fn modify_owners(&mut self, delta:isize) -> Result<Ownership, AccessError> {
+    fn modify_owners(&mut self, delta:isize) -> Result<Ownership, AccessError> {
         let new_ref_count = if delta < 0 {
             if let Some(count) = self.0.checked_sub(delta.abs() as usize) {
                 count
@@ -104,9 +110,10 @@ impl RefCount {
             } else { return Result::Err( AccessError::OwnershipOverflow ) }
         };
         self.0 = new_ref_count;
-        Result::Ok(Ownership::Fine(new_ref_count))
+        if self.0 == 0 { Result::Ok(Ownership::Dangling) }
+        else { Result::Ok(Ownership::Fine(new_ref_count)) }
     }
-    pub fn status(&self) -> Ownership {
+    fn status(&self) -> Ownership {
         match self.0 {
             0 => Ownership::Dangling,
             _ => Ownership::Fine(self.0)
@@ -114,31 +121,33 @@ impl RefCount {
     }
 }
 
-//Figure out why I wrapped steward (and undo it?)
+/// The container placed in each slot of allocated memory
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MemorySlot<T> {
+    /// Notes this memory slot is free and points to the next free slot
     Free(Index),
+    /// Notes this memory slot contains data
     Occupied(Steward<T>),
 }
 impl<T> MemorySlot<T> {
-    pub fn steward(data:T) -> Self {
+    fn steward(data:T) -> Self {
         Self::Occupied(Steward {
             data,
             rc : RefCount(1),
         })
     }
+    ///Handles boilerplate for unwrapping the [Steward] from a [MemorySlot]
     pub fn unwrap_steward(&self) -> Result<&Steward<T>, AccessError> {
         if let MemorySlot::Occupied(steward) = self {
             Result::Ok(steward)
         } else { Result::Err( AccessError::MisalignedTypes ) }
     }
-    pub fn unwrap_steward_mut(&mut self) -> Result<&mut Steward<T>, AccessError> {
+    fn unwrap_steward_mut(&mut self) -> Result<&mut Steward<T>, AccessError> {
         if let MemorySlot::Occupied(steward) = self {
             Result::Ok(steward)
         } else { Result::Err( AccessError::MisalignedTypes ) }
     }
 }
-
 
 /// Used to allocate space on the heap, read from that space, and write to it.
 #[derive(Serialize, Deserialize)]
@@ -259,6 +268,7 @@ impl<T:Clone> Garden<T> {
     pub fn remove_owner<I:Indexable>(&mut self, index:I) -> Result<Option<T>, AccessError> {
         let internal_index = Index(index.index());
         if let Ownership::Dangling = self.mut_slot(internal_index)?.unwrap_steward_mut()?.rc.modify_owners(-1)? {
+            dbg!("Huh");
             Ok( self.free_index(internal_index) )
         } else { Ok(None) }
     }
@@ -309,6 +319,11 @@ impl<T:Clone> Garden<T> {
     pub fn peek(&self) -> &Vec< MemorySlot<T> > {
         &self.memory
     } 
+
+    /// Returns the next index which will be allocated on a [Garden::push] call
+    pub fn next_allocated(&self) -> Index {
+        self.first_free.unwrap_or(Index(*self.last_index() + 1))
+    }
 
 }
 
