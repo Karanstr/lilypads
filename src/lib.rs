@@ -47,6 +47,16 @@
 
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
+
+/// Common types and traits exported for convenience
+pub mod prelude {
+    pub use super::{
+        NodeField, 
+        Index,
+        enums::AccessError
+    };
+}
 
 /// A trait which allows you to customize how indexes are stored on the other side of the api
 pub trait Indexable {
@@ -57,101 +67,112 @@ pub trait Indexable {
 /// A newtype wrapper to represent indexes, the default implementation if you don't want to create your own [Indexable]
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct Index(usize);
+pub struct Index(pub usize);
 impl std::ops::Deref for Index {
     type Target = usize;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+    fn deref(&self) -> &Self::Target { &self.0 }
 }
 impl Indexable for Index {
     fn index(&self) -> usize { self.0 }
 }
 
-/// Errors which may occur while accessing and modifying memory.
-#[derive(Debug)]
-pub enum AccessError {
-    /// Returned when attempting to access an index beyond the length of [MemHeap]'s internal storage
-    OutOfBoundsMemory(Index),
-    /// Returned when attempting to access an index which isn't currently allocated
-    FreeMemory(Index),
-    /// Returned when modification of an index's owner count overflows
-    ReferenceOverflow,
-    /// Returned when the type of data requested doesn't match the type of data stored
-    MisalignedTypes,
-}
-/// The current status of data references
-#[derive(Debug)]
-pub enum RefStatus {
-    /// There are `usize` references of the data
-    Fine(usize),
-    /// There are no references to the data, it's dangling and should be freed.
-    Dangling,
-}
 
-/// Stores some data and the number of references to it
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Steward<T> {
-    data : T,
-    rc : RefCount,
-}
-/// Tracks the number of references to a piece of data have been handed out and not revoked
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[repr(transparent)]
-pub struct RefCount(usize);
-impl RefCount {
-    fn modify_ref(&mut self, delta:isize) -> Result<RefStatus, AccessError> {
-        let new_ref_count = if delta < 0 {
-            if let Some(count) = self.0.checked_sub(delta.abs() as usize) {
-                count
-            } else { return Result::Err( AccessError::ReferenceOverflow ) }
-        } else {
-            if let Some(count) = self.0.checked_add(delta as usize) {
-                count
-            } else { return Result::Err( AccessError::ReferenceOverflow ) }
-        };
-        self.0 = new_ref_count;
-        if self.0 == 0 { Result::Ok(RefStatus::Dangling) }
-        else { Result::Ok(RefStatus::Fine(new_ref_count)) }
+mod enums {
+    use super::Index;
+    /// Errors which may occur while accessing and modifying memory.
+    #[derive(Debug)]
+    pub enum AccessError {
+        /// Returned when attempting to access an index beyond the length of [MemHeap]'s internal storage
+        OutOfBoundsMemory(Index),
+        /// Returned when attempting to access an index which isn't currently allocated
+        FreeMemory(Index),
+        /// Returned when the type of data requested doesn't match the type of data stored
+        MisalignedTypes,
+        /// Returned when a operation fails for some other reason
+        OperationFailed,
     }
 
-    /// Returns the current status of the data references
-    pub fn status(&self) -> RefStatus {
-        match self.0 {
-            0 => RefStatus::Dangling,
-            _ => RefStatus::Fine(self.0)
+    #[derive(Debug)]
+    pub(crate) enum ReferenceError {
+        OverUnder,
+        Dangling,
+    }
+}
+use enums::{AccessError, ReferenceError};
+mod containers {
+    use super::*;
+    /// Stores some data and the number of references to it
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct Steward<T> {
+        pub data : T,
+        pub rc : RefCount,
+    }
+
+    /// Tracks the number of references to a piece of data have been handed out and not revoked
+    #[derive(Debug, Serialize, Deserialize)]
+    #[repr(transparent)]
+    pub struct RefCount(NonZeroUsize);
+    impl RefCount {
+        pub(crate) fn new() -> Self {
+            // Safe because 1 is non-zero
+            Self(NonZeroUsize::new(1).unwrap())
+        }
+
+        pub(crate) fn modify_ref(&mut self, delta:isize) -> Result<NonZeroUsize, ReferenceError> {
+            let current = self.0.get(); // get the raw usize
+            let new_ref_count = if delta < 0 {
+                if let Some(count) = current.checked_sub(delta.abs() as usize) {
+                    count
+                } else { return Err(ReferenceError::OverUnder) }
+            } else {
+                if let Some(count) = current.checked_add(delta as usize) {
+                    count
+                } else { return Err(ReferenceError::OverUnder) }
+            };
+            match NonZeroUsize::new(new_ref_count) {
+                None => Err(ReferenceError::Dangling),
+                Some(ref_count) => {
+                    self.0 = ref_count;
+                    Ok(ref_count)
+                }
+            }
+        }
+
+        /// Returns the current number of references
+        pub fn ref_count(&self) -> NonZeroUsize { self.0 }
+    }
+    
+    /// The container placed in each slot of allocated memory
+    #[derive(Debug, Serialize, Deserialize)]
+    pub enum MemorySlot<T> {
+        /// Notes this memory slot is free and points to the next free slot
+        Free(Index),
+        /// Notes this memory slot contains data
+        Occupied(Steward<T>),
+    }
+    impl<T> MemorySlot<T> {
+        pub(crate) fn steward(data:T) -> Self {
+            Self::Occupied(Steward {
+                data,
+                rc: RefCount::new(),
+            })
+        }
+        /// Handles boilerplate for unwrapping an &[Steward] from a [MemorySlot]
+        pub fn unwrap_steward(&self) -> Result<&Steward<T>, AccessError> {
+            if let MemorySlot::Occupied(steward) = self {
+                Ok(steward)
+            } else { Err( AccessError::MisalignedTypes ) }
+        }
+        /// Handles boilerplate for unwrapping an &mut [Steward] from a [MemorySlot]
+        pub fn unwrap_steward_mut(&mut self) -> Result<&mut Steward<T>, AccessError> {
+            if let MemorySlot::Occupied(steward) = self {
+                Ok(steward)
+            } else { Err( AccessError::MisalignedTypes ) }
         }
     }
-}
 
-/// The container placed in each slot of allocated memory
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum MemorySlot<T> {
-    /// Notes this memory slot is free and points to the next free slot
-    Free(Index),
-    /// Notes this memory slot contains data
-    Occupied(Steward<T>),
 }
-impl<T> MemorySlot<T> {
-    fn steward(data:T) -> Self {
-        Self::Occupied(Steward {
-            data,
-            rc : RefCount(1),
-        })
-    }
-    /// Handles boilerplate for unwrapping an &[Steward] from a [MemorySlot]
-    pub fn unwrap_steward(&self) -> Result<&Steward<T>, AccessError> {
-        if let MemorySlot::Occupied(steward) = self {
-            Result::Ok(steward)
-        } else { Result::Err( AccessError::MisalignedTypes ) }
-    }
-    /// Handles boilerplate for unwrapping an &mut [Steward] from a [MemorySlot]
-    pub fn unwrap_steward_mut(&mut self) -> Result<&mut Steward<T>, AccessError> {
-        if let MemorySlot::Occupied(steward) = self {
-            Result::Ok(steward)
-        } else { Result::Err( AccessError::MisalignedTypes ) }
-    }
-}
+use containers::*;
 
 /// Used to allocate space on the heap, read from that space, and write to it.
 #[derive(Serialize, Deserialize, Debug)]
@@ -161,7 +182,7 @@ pub struct NodeField<T:Clone> {
     first_free : Index,
 }
 
-//Private functions
+// Private methods
 impl<T:Clone> NodeField<T> {
     fn last_index(&self) -> Index {
         Index(self.memory.len() - 1)
@@ -256,8 +277,10 @@ impl<T:Clone> NodeField<T> {
     /// 
     /// Failure to properly track references will lead to either freeing data you wanted or leaking data you didn't.
     pub fn add_ref<I:Indexable>(&mut self, index:I) -> Result<(), AccessError> {
-        self.mut_slot(Index(index.index()))?.unwrap_steward_mut()?.rc.modify_ref(1)?;
-        Ok(())
+        match self.mut_slot(Index(index.index()))?.unwrap_steward_mut()?.rc.modify_ref(1) {
+            Err(ReferenceError::OverUnder) => Err(AccessError::OperationFailed),
+            _ => Ok(())
+        }
     }
 
     /// Tells the NodeField that something no longer references the data at `index`.
@@ -266,25 +289,14 @@ impl<T:Clone> NodeField<T> {
     /// Failure to properly track references will lead to either freeing data you wanted or leaking data you didn't.
     pub fn remove_ref<I:Indexable>(&mut self, index:I) -> Result<Option<T>, AccessError> {
         let internal_index = Index(index.index());
-        if let RefStatus::Dangling = self.mut_slot(internal_index)?.unwrap_steward_mut()?.rc.modify_ref(-1)? {
+        if let Err(ReferenceError::Dangling) = self.mut_slot(internal_index)?.unwrap_steward_mut()?.rc.modify_ref(-1) {
             Ok( self.free_index(internal_index) )
         } else { Ok(None) }
     }
 
-    /// Frees the data at `index` if it's dangling, wrapping it in an [Option::Some] wrapped in a [Result::Ok].
-    /// If there are still references, [Option::None] will be returned in the [Result::Ok] instead.
-    /// If the index is invalid, returns an [AccessError].
-    pub fn free_if_dangling<I:Indexable>(&mut self, index:I) -> Result<Option<T>, AccessError> {
-        let internal_index = Index(index.index());
-        match self.status(internal_index)? {
-            RefStatus::Fine(_) => Ok(None),
-            RefStatus::Dangling => Ok(self.free_index(internal_index)),
-        }
-    }
-
-    /// Returns the [RefStatus] of the data at `index`, or an [AccessError] if the request has a problem
-    pub fn status<I:Indexable>(&self, index:I) -> Result<RefStatus, AccessError> {
-        Ok(self.slot(Index(index.index()))?.unwrap_steward()?.rc.status())
+    /// Returns the number of references the data at `index` has or an [AccessError] if the request has a problem
+    pub fn status<I:Indexable>(&self, index:I) -> Result<NonZeroUsize, AccessError> {
+        Ok(self.slot(Index(index.index()))?.unwrap_steward()?.rc.ref_count())
     }
 
     /// Pushes `data` into the NodeField, returning the index it was stored at.
@@ -316,41 +328,17 @@ impl<T:Clone> NodeField<T> {
     }
 
     /// Returns an immutable reference to the internal memory Vec 
-    pub fn internal_memory(&self) -> &Vec< MemorySlot<T> > {
-        &self.memory
-    } 
+    pub fn internal_memory(&self) -> &Vec< MemorySlot<T> > { &self.memory } 
     
     /// Returns the next index which will be allocated on a [NodeField::push] call
-    pub fn next_allocated(&self) -> Index {
-        self.first_free
-    }
+    pub fn next_allocated(&self) -> Index { self.first_free }
     
-    /// Returns a mutable reference to the internal memory Vec. **You almost certainly don't want to use this.**
-    /// 
-    /// Any mistakes you make with this will be your responsibility.
-    pub fn back_door(&mut self) -> &mut Vec< MemorySlot<T> > {
-        &mut self.memory
-    }
-
-    /// Frees all data which has no references, returning a [Vec] of all freed data.
-    /// 
-    /// This operation is O(n) to the number of slots in memory.
-    pub fn remove_memory_leaks(&mut self) -> Vec<T> {
-        let mut freed_data = Vec::new();
-        for index in 0 .. self.memory.len() {
-            if let Ok(Some(data)) = self.free_if_dangling(Index(index)) {
-                freed_data.push(data);
-            }
-        }
-        freed_data
-    }
-
     /// Travels through memory and refreshes all free slots. 
     /// This process also re-arranges the memory allocation order such that until a new slot is freed allocation will occur in order from the smallest index to the largest.
     /// 
     /// This operation is O(n) to the number of slots in memory.
     pub fn repair_and_sort_allocator(&mut self) {
-        let mut next_free = Option::None;
+        let mut next_free = None;
         for (index, slot) in self.memory.iter_mut().enumerate().rev() {
             if let MemorySlot::Free(_) = slot {
                 *slot = MemorySlot::Free(next_free.unwrap_or(Index(index)));
@@ -371,8 +359,8 @@ impl<T:Clone> NodeField<T> {
     pub fn defrag(&mut self) -> HashMap<Index, Index> {
         let mut remapped = HashMap::new();
         let mut solid_until = 0;
+        if solid_until == self.memory.len() { return remapped }
         let mut free_until = self.memory.len() - 1;
-        if free_until == 0 { return remapped }
         'defrag: loop {
             while let MemorySlot::Occupied(_) = self.memory[solid_until] { 
                 solid_until += 1;
@@ -393,9 +381,8 @@ impl<T:Clone> NodeField<T> {
     #[must_use]
     pub fn trim(&mut self) -> HashMap<Index, Index> {
         let remap = self.defrag();
-        self.memory.shrink_to(*self.first_free);
+        self.memory.truncate(*self.first_free);
         remap
     }
 
 }
-
