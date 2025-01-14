@@ -2,18 +2,18 @@
 //! Fun little virtual memory allocator.
 //! 
 //! This is a learning experience for me and should be used with a mountain of salt.
-//! At some point I need to rename it, but I don't have a good name yet.
+//! At some point I need to rename it, but I don't have a good one yet.
 //! 
 //! This crate is intended for the creation of graphs and similar data structures, with a focus on storing data contiguously in memory while allowing it to have multiple owners. Internally the data is stored in a [Vec].
 //! 
 //! This crate does not yet support Weak or Atomic references to data, that's on the todo list (maybe).
 //! 
 //! Errors which are caused by external factors are handled, canceling the request and returning an [AccessError].
-//! Errors which are caused by internal factors, such as a failure in the allocation process, will be automatically repaired..
+//! Errors which are caused by internal factors, such as a failure in the allocation process, will be automatically repaired. If the repair fails, we will panic!().
 //! 
 //! # Example
 //! ```
-//! use vec_mem_heap::*;
+//! use vec_mem_heap::prelude::*;
 //! 
 //! fn main() {
 //! 
@@ -27,20 +27,20 @@
 //! 
 //!         // Now that a second reference to the data in Index(0) exists, we have to manually add to the reference count.
 //!         let data3 = data1;
-//!         _ = storage.add_ref(data3);
+//!         storage.add_ref(data3);
 //!     
 //!         // data2 and data3 are about to go out of scope, so we have to manually remove their references.
-//!         // Ok( Some(72) ) -> The data at Index(1) only had one reference, so it was freed.
-//!         _ = storage.remove_ref(data2);
+//!         // returns Ok( Some(72) ) -> The data at Index(1) only had one reference, so it was freed.
+//!         storage.remove_ref(data2);
 //! 
-//!         // Ok( None ) -> The data at Index(0) had two references, now one.
-//!         _ = storage.remove_ref(data3); 
+//!         // returns Ok( None ) -> The data at Index(0) had two references, now one.
+//!         storage.remove_ref(data3); 
 //!     }
 //! 
-//!     // Ok( &15 ) -> The data at Index(0) still has one reference (data1).
-//!     _ = dbg!( storage.data( Index(0) ) );
+//!     // returns Ok( &15 ) -> The data at Index(0) still has one reference (data1).
+//!     dbg!( storage.data( Index(0) ) );
 //!     // Err( AccessError::FreeMemory(Index(1)) ) -> The data at Index(1) was freed when its last reference was removed.
-//!     _ = dbg!( storage.data( Index(1) ) );
+//!     dbg!( storage.data( Index(1) ) );
 //! 
 //! }
 //! ```
@@ -49,7 +49,10 @@ use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
-/// Common types and traits exported for convenience
+/// Common types and traits exported for convenience.
+/// 
+/// This module re-exports the most commonly used types from this crate.
+/// Import everything from this module with `use vec_mem_heap::prelude::*`.
 pub mod prelude {
     pub use super::{
         NodeField, 
@@ -77,6 +80,9 @@ impl Indexable for Index {
 }
 
 
+/// Error types used throughout the crate.
+/// 
+/// Contains [AccessError] for error reporting when operations fail.
 mod enums {
     use super::Index;
     /// Errors which may occur while accessing and modifying memory.
@@ -99,6 +105,12 @@ mod enums {
     }
 }
 use enums::{AccessError, ReferenceError};
+/// Internal container types for memory management, made public so you can properly read the memory through [NodeField::internal_memory].
+/// 
+/// Contains:
+/// - [Steward]: Wraps data and reference counting
+/// - [MemorySlot]: Tracks allocation status (Free or Occupied)
+/// - [RefCount]: Handles reference counting logic
 mod containers {
     use super::*;
     /// Stores some data and the number of references to it
@@ -252,8 +264,8 @@ impl<T:Clone> NodeField<T> {
     /// Constructs a new `NodeField` which can store data of type `T` 
     /// # Example
     /// ```
-    /// //Stores u32s
-    /// let mut storage = NodeField::<u32>::new();
+    /// //Stores i32s
+    /// let mut storage = NodeField::<i32>::new();
     /// ```
     pub fn new() -> Self {
         Self {

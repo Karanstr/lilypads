@@ -134,7 +134,7 @@ fn test_trim() {
 }
 
 #[test]
-fn test_trim_to_0() {
+fn test_trim_all_free() {
     let mut storage = NodeField::<i32>::new();
 
     let idx1 = storage.push(1);
@@ -152,7 +152,7 @@ fn test_trim_to_0() {
 }
 
 #[test]
-fn test_trim_at_0() {
+fn test_trim_empty() {
     let mut storage = NodeField::<i32>::new();
 
     _ = storage.trim();
