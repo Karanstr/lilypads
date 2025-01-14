@@ -63,7 +63,7 @@ impl Indexable for Index {
     fn index(&self) -> usize { self.0 }
 }
 
-/// A collection of errors which may occur while handling memory.
+/// Errors which may occur while accessing and modifying memory.
 #[derive(Debug)]
 pub enum AccessError {
     /// Returned when attempting to access an index beyond the length of [MemHeap]'s internal storage
@@ -76,6 +76,7 @@ pub enum AccessError {
     MisalignedTypes,
 }
 /// The current status of data ownership
+#[derive(Debug)]
 pub enum Ownership {
     /// There are `usize` owners of the data
     Fine(usize),
@@ -83,12 +84,6 @@ pub enum Ownership {
     Dangling,
 }
 
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Marker {
-    last_marker : Index,
-    next_marker : Index,
-}
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Steward<T> {
     data : T,
@@ -119,11 +114,11 @@ impl RefCount {
     }
 }
 
+//Figure out why I wrapped steward (and undo it?)
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MemorySlot<T> {
-    Free,
+    Free(Index),
     Occupied(Steward<T>),
-    Marker(Marker),
 }
 impl<T> MemorySlot<T> {
     pub fn steward(data:T) -> Self {
@@ -142,22 +137,6 @@ impl<T> MemorySlot<T> {
             Result::Ok(steward)
         } else { Result::Err( AccessError::MisalignedTypes ) }
     }
-    pub fn marker(last_marker:Index, next_marker:Index) -> Self {
-        Self::Marker(Marker {
-            last_marker,
-            next_marker,
-        })
-    }
-    pub fn unwrap_marker(&self) -> Result<&Marker, AccessError> {
-        if let MemorySlot::Marker(marker) = self {
-            Result::Ok(marker)
-        } else { Result::Err( AccessError::MisalignedTypes ) }
-    }
-    pub fn unwrap_marker_mut(&mut self) -> Result<&mut Marker, AccessError> {
-        if let MemorySlot::Marker(marker) = self {
-            Result::Ok(marker)
-        } else { Result::Err( AccessError::MisalignedTypes ) }
-    }
 }
 
 
@@ -166,8 +145,7 @@ impl<T> MemorySlot<T> {
 pub struct Garden<T:Clone> {
     /// The container used to manage allocated memory
     memory : Vec< MemorySlot<T> >,
-    /// Stores list of indexes which can be written to 
-    free_indexes : Vec<Index>,
+    first_free : Option<Index>,
 }
 
 //Private functions
@@ -180,7 +158,7 @@ impl<T:Clone> Garden<T> {
         match index {
             bad_index if index > self.last_index() => Err( AccessError::OutOfBoundsMemory(bad_index) ),
             index => match &mut self.memory[*index] {
-                MemorySlot::Free | MemorySlot::Marker { .. } => Err( AccessError::FreeMemory(index) ),
+                MemorySlot::Free { .. } => Err( AccessError::FreeMemory(index) ),
                 MemorySlot::Occupied { .. } => Ok( &mut self.memory[*index] ),
             }
         }
@@ -190,13 +168,12 @@ impl<T:Clone> Garden<T> {
         match index {
             bad_index if index > self.last_index() => Err( AccessError::OutOfBoundsMemory(bad_index) ),
             index => match &self.memory[*index] {
-                MemorySlot::Free | MemorySlot::Marker { .. } => Err( AccessError::FreeMemory(index) ),
+                MemorySlot::Free { .. } => Err( AccessError::FreeMemory(index) ),
                 MemorySlot::Occupied { .. } => Ok( &self.memory[*index] ),
             }
         }
     }
 
-    //Rewrite these two to work with the new memory system
     fn free_index(&mut self, index:Index) -> Option<T> {
         let data = {
             let Ok(slot) = self.mut_slot(index) else { return None };
@@ -209,19 +186,22 @@ impl<T:Clone> Garden<T> {
             }
         };
 
-        self.memory[*index] = MemorySlot::Free;
-        self.free_indexes.push(index);
+        self.memory[*index] = MemorySlot::Free(self.first_free.unwrap_or(index));
+        self.first_free = Some(index);
         Some(data)
     }
 
-    fn reserve_index(&mut self) -> Index {
-        match self.free_indexes.pop() {
-            Some(index) => index,
-            None => {
-                self.memory.push(MemorySlot::Free);
-                self.last_index()
+    fn reserve_index(&mut self) -> Option<Index> {
+        let first_free = self.first_free?;
+        if let MemorySlot::Free(next_free) = self.memory[*first_free] {
+            if next_free == first_free { 
+                self.first_free = None;
+                Some(first_free)
+            } else {
+                self.first_free = Some(next_free);
+                Some(first_free)
             }
-        }        
+        } else { None }
     }
 }
 
@@ -236,7 +216,7 @@ impl<T:Clone> Garden<T> {
     pub fn new() -> Self {
         Self {
             memory : Vec::new(),
-            free_indexes : Vec::new(),
+            first_free : None,
         }
     }
 
@@ -304,9 +284,16 @@ impl<T:Clone> Garden<T> {
     /// Once you recieve the index the data was stored at, it is your responsibility to manage its owners.
     /// The data will start with one owner.
     pub fn push(&mut self, data:T) -> Index {
-        let index = self.reserve_index();
-        self.memory[*index] = MemorySlot::steward(data);
-        index
+        match self.reserve_index() {
+            Some(index) => {
+                self.memory[*index] = MemorySlot::steward(data);
+                index
+            },
+            None => {
+                self.memory.push(MemorySlot::steward(data));
+                Index(self.memory.len() - 1)
+            },
+        }
     }
 
     /// Replaces the data at `index` with `new_data`, returning the replaced data on success and an [AccessError] on failure.
