@@ -1,11 +1,15 @@
 #![warn(missing_docs)]
-//! Silly virtual memory allocator.
+//! Fun little virtual memory allocator.
 //! 
 //! This is a learning experience for me and should be used with a mountain of salt.
+//! At some point I need to rename it, but I don't have a good name yet.
 //! 
 //! This crate is intended for the creation of graphs and similar data structures, with a focus on storing data contiguously in memory while allowing it to have multiple owners. Internally the data is stored in a [Vec].
 //! 
-//! This crate does not yet support Weak or Atomic references to data, that's on the todo list.
+//! This crate does not yet support Weak or Atomic references to data, that's on the todo list (maybe).
+//! 
+//! Errors which are caused by external factors are handled, canceling the request and returning an [AccessError].
+//! Errors which are caused by internal factors, such as a failure in the allocation process, will be automatically repaired..
 //! 
 //! # Example
 //! ```
@@ -13,47 +17,45 @@
 //! 
 //! fn main() {
 //! 
-//!     let mut mem_heap : MemHeap<u32> = MemHeap::new();
+//!     let mut storage : NodeField<u32> = NodeField::new();
 //! 
-//!     let data1 = mem_heap.push(15); //data1 == Index(0)
-//!     //Normally you'd write matches here to catch AccessErrors, but that's a lot of writing I don't want to do
-//!     _ = mem_heap.add_owner(data1);
+//!     // When you push data into the structure, it returns the index that data was stored at and sets the reference count to 1.
+//!     let data1 = storage.push(15); // data1 == Index(0)
 //!
 //!     {
-//!         let data2 = mem_heap.push(72); // data2 == Index(1)
-//!         //Index derives copy, so it can be passed around as parameters without worrying about references/ownership.
-//!         _ = mem_heap.add_owner(data2);
+//!         let data2 = storage.push(72); // data2 == Index(1)
 //! 
+//!         // Now that a second reference to the data in Index(0) exists, we have to manually add to the reference count.
 //!         let data3 = data1;
-//!         //The value stored in mem_heap.data(Index(0)) now has two owners.
-//!         _ = mem_heap.add_owner(data3);
+//!         _ = storage.add_ref(data3);
 //!     
-//!         //data2 and data3 are about to go out of scope, so we have to manually remove them as owners.
-//!         //Ok( Some(72) ) -> The data at Index(1) only had one owner, so it was collected
-//!         _ = mem_heap.remove_owner(data2);
-//!         // Err( AccessError::ProtectedMemory( Index(2) ) ) -> The data at Index(2) was protected, we can't modify its owner_count
-//!         _ = mem_heap.remove_owner(data3); 
-//!         // Ok( None ) -> The data at Index(0) had two owners, now has one owner. Nothing needs to be done
-//!         _ = mem_heap.remove_owner(data1); 
+//!         // data2 and data3 are about to go out of scope, so we have to manually remove their references.
+//!         // Ok( Some(72) ) -> The data at Index(1) only had one reference, so it was freed.
+//!         _ = storage.remove_ref(data2);
+//! 
+//!         // Ok( None ) -> The data at Index(0) had two references, now one.
+//!         _ = storage.remove_ref(data3); 
 //!     }
-//!     // Ok( &15 ) -> The data at Index(0) still has one owner (data1). If the data didn't derive copy, we would recieve &data instead.
-//!     _ = dbg!( mem_heap.data( Index(0) ) );
-//!     // Err( AccessError::FreeMemory(Index(1)) ) -> The data at Index(1) was garbage collected when its final owner was removed
-//!     _ = dbg!( mem_heap.data( Index(1) ) );
+//! 
+//!     // Ok( &15 ) -> The data at Index(0) still has one reference (data1).
+//!     _ = dbg!( storage.data( Index(0) ) );
+//!     // Err( AccessError::FreeMemory(Index(1)) ) -> The data at Index(1) was freed when its last reference was removed.
+//!     _ = dbg!( storage.data( Index(1) ) );
 //! 
 //! }
 //! ```
 
 use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
 
-///A trait which allows you to customize how indexes are stored on the other side of the api
+/// A trait which allows you to customize how indexes are stored on the other side of the api
 pub trait Indexable {
     ///Allows the library to convert your type to its internal [Index] representation
     fn index(&self) -> usize;
 }
 
-///A newtype wrapper to represent indexes, the default implementation if you don't want to create your own [Indexable]
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// A newtype wrapper to represent indexes, the default implementation if you don't want to create your own [Indexable]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Index(usize);
 impl std::ops::Deref for Index {
@@ -74,55 +76,56 @@ pub enum AccessError {
     /// Returned when attempting to access an index which isn't currently allocated
     FreeMemory(Index),
     /// Returned when modification of an index's owner count overflows
-    OwnershipOverflow,
+    ReferenceOverflow,
     /// Returned when the type of data requested doesn't match the type of data stored
     MisalignedTypes,
 }
-/// The current status of data ownership
+/// The current status of data references
 #[derive(Debug)]
-pub enum Ownership {
-    /// There are `usize` owners of the data
+pub enum RefStatus {
+    /// There are `usize` references of the data
     Fine(usize),
-    /// Nobody owns the data, it's dangling and should be freed.
+    /// There are no references to the data, it's dangling and should be freed.
     Dangling,
 }
 
 /// Stores some data and the number of references to it
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Steward<T> {
     data : T,
     rc : RefCount,
 }
-
 /// Tracks the number of references to a piece of data have been handed out and not revoked
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[repr(transparent)]
-pub struct RefCount(pub usize);
+pub struct RefCount(usize);
 impl RefCount {
-    fn modify_owners(&mut self, delta:isize) -> Result<Ownership, AccessError> {
+    fn modify_ref(&mut self, delta:isize) -> Result<RefStatus, AccessError> {
         let new_ref_count = if delta < 0 {
             if let Some(count) = self.0.checked_sub(delta.abs() as usize) {
                 count
-            } else { return Result::Err( AccessError::OwnershipOverflow ) }
+            } else { return Result::Err( AccessError::ReferenceOverflow ) }
         } else {
             if let Some(count) = self.0.checked_add(delta as usize) {
                 count
-            } else { return Result::Err( AccessError::OwnershipOverflow ) }
+            } else { return Result::Err( AccessError::ReferenceOverflow ) }
         };
         self.0 = new_ref_count;
-        if self.0 == 0 { Result::Ok(Ownership::Dangling) }
-        else { Result::Ok(Ownership::Fine(new_ref_count)) }
+        if self.0 == 0 { Result::Ok(RefStatus::Dangling) }
+        else { Result::Ok(RefStatus::Fine(new_ref_count)) }
     }
-    fn status(&self) -> Ownership {
+
+    /// Returns the current status of the data references
+    pub fn status(&self) -> RefStatus {
         match self.0 {
-            0 => Ownership::Dangling,
-            _ => Ownership::Fine(self.0)
+            0 => RefStatus::Dangling,
+            _ => RefStatus::Fine(self.0)
         }
     }
 }
 
 /// The container placed in each slot of allocated memory
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum MemorySlot<T> {
     /// Notes this memory slot is free and points to the next free slot
     Free(Index),
@@ -136,13 +139,14 @@ impl<T> MemorySlot<T> {
             rc : RefCount(1),
         })
     }
-    ///Handles boilerplate for unwrapping the [Steward] from a [MemorySlot]
+    /// Handles boilerplate for unwrapping an &[Steward] from a [MemorySlot]
     pub fn unwrap_steward(&self) -> Result<&Steward<T>, AccessError> {
         if let MemorySlot::Occupied(steward) = self {
             Result::Ok(steward)
         } else { Result::Err( AccessError::MisalignedTypes ) }
     }
-    fn unwrap_steward_mut(&mut self) -> Result<&mut Steward<T>, AccessError> {
+    /// Handles boilerplate for unwrapping an &mut [Steward] from a [MemorySlot]
+    pub fn unwrap_steward_mut(&mut self) -> Result<&mut Steward<T>, AccessError> {
         if let MemorySlot::Occupied(steward) = self {
             Result::Ok(steward)
         } else { Result::Err( AccessError::MisalignedTypes ) }
@@ -150,15 +154,15 @@ impl<T> MemorySlot<T> {
 }
 
 /// Used to allocate space on the heap, read from that space, and write to it.
-#[derive(Serialize, Deserialize)]
-pub struct Garden<T:Clone> {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NodeField<T:Clone> {
     /// The container used to manage allocated memory
     memory : Vec< MemorySlot<T> >,
-    first_free : Option<Index>,
+    first_free : Index,
 }
 
 //Private functions
-impl<T:Clone> Garden<T> {
+impl<T:Clone> NodeField<T> {
     fn last_index(&self) -> Index {
         Index(self.memory.len() - 1)
     }
@@ -194,105 +198,100 @@ impl<T:Clone> Garden<T> {
                 },
             }
         };
-
-        self.memory[*index] = MemorySlot::Free(self.first_free.unwrap_or(index));
-        self.first_free = Some(index);
+        let next_free = if *self.first_free == self.memory.len() { index } else { self.first_free };
+        self.memory[*index] = MemorySlot::Free(next_free);
+        self.first_free = index;
         Some(data)
     }
 
     fn reserve_index(&mut self) -> Option<Index> {
-        let first_free = self.first_free?;
-        if let MemorySlot::Free(next_free) = self.memory[*first_free] {
-            if next_free == first_free { 
-                self.first_free = None;
-                Some(first_free)
-            } else {
-                self.first_free = Some(next_free);
-                Some(first_free)
-            }
-        } else { None }
+        let first_free = self.first_free;
+        if *first_free == self.memory.len() { 
+            self.first_free = Index(self.memory.len() + 1);
+            return None 
+        }
+        let next_free = if let MemorySlot::Free(next_free) = self.memory[*first_free]  {
+            next_free
+        } else { 
+            dbg!("Repairing allocator");
+            self.repair_and_sort_allocator();
+            let MemorySlot::Free(next_free) = self.memory[*first_free] else { panic!("Failed to repair allocator") };
+            next_free
+        };
+        if next_free == first_free { 
+            if self.memory.len() == 0 { self.first_free = Index(1) }
+            else { self.first_free = Index(self.memory.len()) }
+        } else { self.first_free = next_free; }
+        Some(first_free)
     }
 }
 
 //Public functions
-impl<T:Clone> Garden<T> {
-    /// Constructs a new `MemHeap` which can store data of type `T` 
+impl<T:Clone> NodeField<T> {
+    /// Constructs a new `NodeField` which can store data of type `T` 
     /// # Example
     /// ```
-    /// //Stores u32's in each index.
-    /// let mut mem_heap:MemHeap<u32> = MemHeap::new();
+    /// //Stores u32s
+    /// let mut storage = NodeField::<u32>::new();
     /// ```
     pub fn new() -> Self {
         Self {
             memory : Vec::new(),
-            first_free : None,
-        }
-    }
-
-    /// Returns the number of indexes the MemHeap currently has allocated.
-    pub fn length(&self) -> usize {
-        self.memory.len()
-    }
-
-    /// Frees all data which has no owners
-    /// 
-    /// This operation is O(n) to the total number of allocated indexes (which can be found using [MemHeap::length]).
-    pub fn remove_memory_leaks(&mut self) {
-        for cell in 0 .. self.memory.len() {
-            let index = Index(cell);
-            let Ok(slot) = self.mut_slot(index) else { continue };
-            if let Ownership::Dangling = slot.unwrap_steward().unwrap().rc.status() { self.free_index(index); }
+            first_free : Index(0),
         }
     }
 
     /// Returns an immutable reference to the data stored at the requested index, or an [AccessError] if there is a problem.
-    /// 
-    /// The equivalent to using & to borrow variables in normal Rust.
     pub fn data<I:Indexable>(&self, index:I) -> Result<&T, AccessError> {
         Ok(&self.slot(Index(index.index()))?.unwrap_steward()?.data)
     }
 
-    /// Tells the MemHeap that something else owns the data at `index`.
-    /// So long as MemHeap thinks there is at least one owner, the data won't be garbage collected.
+    /// Returns a mutable reference to the data stored at the requested index, or an [AccessError] if there is a problem.
+    pub fn mut_data<I:Indexable>(&mut self, index:I) -> Result<&mut T, AccessError> {
+        Ok(&mut self.mut_slot(Index(index.index()))?.unwrap_steward_mut()?.data)
+    }
+
+    /// Tells the NodeField that something else references the data at `index`.
+    /// So long as the NodeField thinks there is at least one reference, the data won't be freed.
     /// 
-    /// Failure to properly track ownership will lead to either garbage collection of active data or leaking of inactive data
-    pub fn add_owner<I:Indexable>(&mut self, index:I) -> Result<(), AccessError> {
-        self.mut_slot(Index(index.index()))?.unwrap_steward_mut()?.rc.modify_owners(1)?;
+    /// Failure to properly track references will lead to either freeing data you wanted or leaking data you didn't.
+    pub fn add_ref<I:Indexable>(&mut self, index:I) -> Result<(), AccessError> {
+        self.mut_slot(Index(index.index()))?.unwrap_steward_mut()?.rc.modify_ref(1)?;
         Ok(())
     }
 
-    /// Tells the MemHeap that something no longer owns the data at `index`.
-    /// By default, if calling this function renders the ownercount of data 0, it will automatically be garbage collected and returned.
+    /// Tells the NodeField that something no longer references the data at `index`.
+    /// If calling this function renders the refcount 0, the data will be freed and returned.
     /// 
-    /// Failure to properly track ownership will lead to either garbage collection of active data or leaking of inactive data.
-    pub fn remove_owner<I:Indexable>(&mut self, index:I) -> Result<Option<T>, AccessError> {
+    /// Failure to properly track references will lead to either freeing data you wanted or leaking data you didn't.
+    pub fn remove_ref<I:Indexable>(&mut self, index:I) -> Result<Option<T>, AccessError> {
         let internal_index = Index(index.index());
-        if let Ownership::Dangling = self.mut_slot(internal_index)?.unwrap_steward_mut()?.rc.modify_owners(-1)? {
-            dbg!("Huh");
+        if let RefStatus::Dangling = self.mut_slot(internal_index)?.unwrap_steward_mut()?.rc.modify_ref(-1)? {
             Ok( self.free_index(internal_index) )
         } else { Ok(None) }
     }
 
-    /// Frees the data at `index` and returns it wrapped in an [Option::Some] wrapped in a [Result::Ok] if the data is ownerless.
-    /// If there are still owners, [Option::None] will be returned in the [Result::Ok] instead.
-    /// If the index is invalid, or the data cannot be freed for some reason, returns an [AccessError].
+    /// Frees the data at `index` if it's dangling, wrapping it in an [Option::Some] wrapped in a [Result::Ok].
+    /// If there are still references, [Option::None] will be returned in the [Result::Ok] instead.
+    /// If the index is invalid, returns an [AccessError].
     pub fn free_if_dangling<I:Indexable>(&mut self, index:I) -> Result<Option<T>, AccessError> {
         let internal_index = Index(index.index());
         match self.status(internal_index)? {
-            Ownership::Fine(_) => Ok(None),
-            Ownership::Dangling => Ok(self.free_index(internal_index)),
+            RefStatus::Fine(_) => Ok(None),
+            RefStatus::Dangling => Ok(self.free_index(internal_index)),
         }
     }
 
-    /// Returns the [Ownership] of the data at `index`, or an [AccessError] if the request has a problem
-    pub fn status<I:Indexable>(&self, index:I) -> Result<Ownership, AccessError> {
+    /// Returns the [RefStatus] of the data at `index`, or an [AccessError] if the request has a problem
+    pub fn status<I:Indexable>(&self, index:I) -> Result<RefStatus, AccessError> {
         Ok(self.slot(Index(index.index()))?.unwrap_steward()?.rc.status())
     }
 
-    /// Pushes `data` into the MemHeap, selecting the first free index for insertion and returning that index.
+    /// Pushes `data` into the NodeField, returning the index it was stored at.
     /// 
-    /// Once you recieve the index the data was stored at, it is your responsibility to manage its owners.
-    /// The data will start with one owner.
+    /// Once you recieve the index the data was stored at, it is your responsibility to manage its references.
+    /// The data will start with one reference.
+    #[must_use]
     pub fn push(&mut self, data:T) -> Index {
         match self.reserve_index() {
             Some(index) => {
@@ -307,7 +306,8 @@ impl<T:Clone> Garden<T> {
     }
 
     /// Replaces the data at `index` with `new_data`, returning the replaced data on success and an [AccessError] on failure.
-    /// You may only replace reserved data. Free indexes should be filled with [MemHeap::push].
+    /// You may not replace an index which is currently free. 
+    /// There isn't currently a way to select the index you wish to insert at, though you can view the next free index with [NodeField::next_allocated]
     pub fn replace<I:Indexable>(&mut self, index:I, new_data:T) -> Result<T, AccessError> {
         let wrapper = self.mut_slot(Index(index.index()))?.unwrap_steward_mut()?;
         let old_data = wrapper.data.clone();
@@ -315,14 +315,86 @@ impl<T:Clone> Garden<T> {
         Ok(old_data)
     }
 
-    /// Returns an immutable reference to the internal memory Vec
-    pub fn peek(&self) -> &Vec< MemorySlot<T> > {
+    /// Returns an immutable reference to the internal memory Vec 
+    pub fn internal_memory(&self) -> &Vec< MemorySlot<T> > {
         &self.memory
     } 
-
-    /// Returns the next index which will be allocated on a [Garden::push] call
+    
+    /// Returns the next index which will be allocated on a [NodeField::push] call
     pub fn next_allocated(&self) -> Index {
-        self.first_free.unwrap_or(Index(*self.last_index() + 1))
+        self.first_free
+    }
+    
+    /// Returns a mutable reference to the internal memory Vec. **You almost certainly don't want to use this.**
+    /// 
+    /// Any mistakes you make with this will be your responsibility.
+    pub fn back_door(&mut self) -> &mut Vec< MemorySlot<T> > {
+        &mut self.memory
+    }
+
+    /// Frees all data which has no references, returning a [Vec] of all freed data.
+    /// 
+    /// This operation is O(n) to the number of slots in memory.
+    pub fn remove_memory_leaks(&mut self) -> Vec<T> {
+        let mut freed_data = Vec::new();
+        for index in 0 .. self.memory.len() {
+            if let Ok(Some(data)) = self.free_if_dangling(Index(index)) {
+                freed_data.push(data);
+            }
+        }
+        freed_data
+    }
+
+    /// Travels through memory and refreshes all free slots. 
+    /// This process also re-arranges the memory allocation order such that until a new slot is freed allocation will occur in order from the smallest index to the largest.
+    /// 
+    /// This operation is O(n) to the number of slots in memory.
+    pub fn repair_and_sort_allocator(&mut self) {
+        let mut next_free = Option::None;
+        for (index, slot) in self.memory.iter_mut().enumerate().rev() {
+            if let MemorySlot::Free(_) = slot {
+                *slot = MemorySlot::Free(next_free.unwrap_or(Index(index)));
+                next_free = Some(Index(index));
+            }
+        }
+        self.first_free = next_free.unwrap_or(Index(self.memory.len()));
+    }
+
+    /// Travels through memory and re-arranges slots so that they are contiguous in memory, with no free slots in between occupied ones.
+    /// The hashmap returned can be used to remap your references to their new locations. (Key:Old, Value:New)
+    /// 
+    /// Slots at the back of memory will be placed in the first free slot, until the above condition is met.
+    /// The allocator will then be repaired using [NodeField::repair_and_sort_allocator].
+    /// 
+    /// This operation is O(n) to the number of slots in memory.
+    #[must_use]
+    pub fn defrag(&mut self) -> HashMap<Index, Index> {
+        let mut remapped = HashMap::new();
+        let mut solid_until = 0;
+        let mut free_until = self.memory.len() - 1;
+        if free_until == 0 { return remapped }
+        'defrag: loop {
+            while let MemorySlot::Occupied(_) = self.memory[solid_until] { 
+                solid_until += 1;
+                if solid_until == free_until { break 'defrag }
+            }
+            while let MemorySlot::Free(_) = self.memory[free_until] { 
+                free_until -= 1;
+                if free_until == solid_until { break 'defrag }
+            }
+            remapped.insert(Index(free_until), Index(solid_until));
+            self.memory.swap(free_until, solid_until);
+        }
+        self.repair_and_sort_allocator();
+        remapped
+    }
+
+    /// [NodeField::defrag]s the memory, then shrinks the internal memory Vec to the size of the block of occupied memory.
+    #[must_use]
+    pub fn trim(&mut self) -> HashMap<Index, Index> {
+        let remap = self.defrag();
+        self.memory.shrink_to(*self.first_free);
+        remap
     }
 
 }

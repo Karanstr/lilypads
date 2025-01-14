@@ -2,7 +2,7 @@
 name = "vec_mem_heap"
 version = "0.3.0"
 edition = "2021"
-description = "A Vec with each element wrapped in a reference counter.."
+description = "A Vec with each element wrapped in a reference counter."
 repository = "https://github.com/Karanstr/vec_mem_heap"
 license = "MIT"
 
