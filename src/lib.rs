@@ -111,13 +111,13 @@ use enums::{AccessError, ReferenceError};
 mod containers {
     use super::*;
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Steward<T> {
         pub data : T,
         pub rc : RefCount,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     #[repr(transparent)]
     pub struct RefCount(NonZeroUsize);
     impl RefCount {
@@ -149,7 +149,7 @@ mod containers {
     }
     
     /// The container placed in each slot of allocated memory
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub enum MemorySlot<T> {
         /// Notes this memory slot is free and points to the next free slot
         Free(Index),
