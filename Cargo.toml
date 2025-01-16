@@ -1,6 +1,6 @@
 [package]
 name = "vec_mem_heap"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "A Vec with each element wrapped in a reference counter."
 repository = "https://github.com/Karanstr/vec_mem_heap"
