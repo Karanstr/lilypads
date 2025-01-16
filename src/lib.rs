@@ -61,12 +61,14 @@ pub mod prelude {
     };
 }
 
-/// A trait which allows you to customize how indexes are stored on the other side of the api
+/// Internal type(s) exported for situations where you need to implement traits on the NodeField which require bounds or methods which aren't avaliable.
+pub mod internals { pub use super::containers::MemorySlot; }
+
+/// A trait which allows you to customize how indexes are stored on your side of the api
 pub trait Indexable {
     ///Allows the library to convert your type to its internal [Index] representation
-    fn index(&self) -> usize;
+    fn to_index(&self) -> Index;
 }
-
 /// A newtype wrapper to represent indexes, the default implementation if you don't want to create your own [Indexable]
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
@@ -76,13 +78,13 @@ impl std::ops::Deref for Index {
     fn deref(&self) -> &Self::Target { &self.0 }
 }
 impl Indexable for Index {
-    fn index(&self) -> usize { self.0 }
+    fn to_index(&self) -> Index { *self }
 }
 
 
-/// Error types used throughout the crate.
+/// Error type(s) used throughout the crate.
 /// 
-/// Contains [AccessError] for error reporting when operations fail.
+/// Contains [AccessError] for error reporting when and how operations fail.
 mod enums {
     use super::Index;
     /// Errors which may occur while accessing and modifying memory.
@@ -94,7 +96,7 @@ mod enums {
         FreeMemory(Index),
         /// Returned when the type of data requested doesn't match the type of data stored
         MisalignedTypes,
-        /// Returned when a operation fails for some other reason
+        /// Catch all for operation failure
         OperationFailed,
     }
 
@@ -105,28 +107,21 @@ mod enums {
     }
 }
 use enums::{AccessError, ReferenceError};
-/// Internal container types for memory management, made public so you can properly read the memory through [NodeField::internal_memory].
-/// 
-/// Contains:
-/// - [Steward]: Wraps data and reference counting
-/// - [MemorySlot]: Tracks allocation status (Free or Occupied)
-/// - [RefCount]: Handles reference counting logic
+/// Internal container type(s) for memory management.
 mod containers {
     use super::*;
-    /// Stores some data and the number of references to it
+
     #[derive(Debug, Serialize, Deserialize)]
     pub struct Steward<T> {
         pub data : T,
         pub rc : RefCount,
     }
 
-    /// Tracks the number of references to a piece of data have been handed out and not revoked
     #[derive(Debug, Serialize, Deserialize)]
     #[repr(transparent)]
     pub struct RefCount(NonZeroUsize);
     impl RefCount {
         pub(crate) fn new() -> Self {
-            // Safe because 1 is non-zero
             Self(NonZeroUsize::new(1).unwrap())
         }
 
@@ -150,7 +145,6 @@ mod containers {
             }
         }
 
-        /// Returns the current number of references
         pub fn ref_count(&self) -> NonZeroUsize { self.0 }
     }
     
@@ -169,13 +163,13 @@ mod containers {
                 rc: RefCount::new(),
             })
         }
-        /// Handles boilerplate for unwrapping an &[Steward] from a [MemorySlot]
+        /// Handles boilerplate for unwrapping a &[Steward] from a [MemorySlot]
         pub fn unwrap_steward(&self) -> Result<&Steward<T>, AccessError> {
             if let MemorySlot::Occupied(steward) = self {
                 Ok(steward)
             } else { Err( AccessError::MisalignedTypes ) }
         }
-        /// Handles boilerplate for unwrapping an &mut [Steward] from a [MemorySlot]
+        /// Handles boilerplate for unwrapping a &mut [Steward] from a [MemorySlot]
         pub fn unwrap_steward_mut(&mut self) -> Result<&mut Steward<T>, AccessError> {
             if let MemorySlot::Occupied(steward) = self {
                 Ok(steward)
@@ -276,12 +270,12 @@ impl<T:Clone> NodeField<T> {
 
     /// Returns an immutable reference to the data stored at the requested index, or an [AccessError] if there is a problem.
     pub fn data<I:Indexable>(&self, index:I) -> Result<&T, AccessError> {
-        Ok(&self.slot(Index(index.index()))?.unwrap_steward()?.data)
+        Ok(&self.slot(index.to_index())?.unwrap_steward()?.data)
     }
 
     /// Returns a mutable reference to the data stored at the requested index, or an [AccessError] if there is a problem.
     pub fn mut_data<I:Indexable>(&mut self, index:I) -> Result<&mut T, AccessError> {
-        Ok(&mut self.mut_slot(Index(index.index()))?.unwrap_steward_mut()?.data)
+        Ok(&mut self.mut_slot(index.to_index())?.unwrap_steward_mut()?.data)
     }
 
     /// Tells the NodeField that something else references the data at `index`.
@@ -289,7 +283,7 @@ impl<T:Clone> NodeField<T> {
     /// 
     /// Failure to properly track references will lead to either freeing data you wanted or leaking data you didn't.
     pub fn add_ref<I:Indexable>(&mut self, index:I) -> Result<(), AccessError> {
-        match self.mut_slot(Index(index.index()))?.unwrap_steward_mut()?.rc.modify_ref(1) {
+        match self.mut_slot(index.to_index())?.unwrap_steward_mut()?.rc.modify_ref(1) {
             Err(ReferenceError::OverUnder) => Err(AccessError::OperationFailed),
             _ => Ok(())
         }
@@ -300,7 +294,7 @@ impl<T:Clone> NodeField<T> {
     /// 
     /// Failure to properly track references will lead to either freeing data you wanted or leaking data you didn't.
     pub fn remove_ref<I:Indexable>(&mut self, index:I) -> Result<Option<T>, AccessError> {
-        let internal_index = Index(index.index());
+        let internal_index = index.to_index();
         if let Err(ReferenceError::Dangling) = self.mut_slot(internal_index)?.unwrap_steward_mut()?.rc.modify_ref(-1) {
             Ok( self.free_index(internal_index) )
         } else { Ok(None) }
@@ -308,7 +302,7 @@ impl<T:Clone> NodeField<T> {
 
     /// Returns the number of references the data at `index` has or an [AccessError] if the request has a problem
     pub fn status<I:Indexable>(&self, index:I) -> Result<NonZeroUsize, AccessError> {
-        Ok(self.slot(Index(index.index()))?.unwrap_steward()?.rc.ref_count())
+        Ok(self.slot(index.to_index())?.unwrap_steward()?.rc.ref_count())
     }
 
     /// Pushes `data` into the NodeField, returning the index it was stored at.
@@ -333,7 +327,7 @@ impl<T:Clone> NodeField<T> {
     /// You may not replace an index which is currently free. 
     /// There isn't currently a way to select the index you wish to insert at, though you can view the next free index with [NodeField::next_allocated]
     pub fn replace<I:Indexable>(&mut self, index:I, new_data:T) -> Result<T, AccessError> {
-        let wrapper = self.mut_slot(Index(index.index()))?.unwrap_steward_mut()?;
+        let wrapper = self.mut_slot(index.to_index())?.unwrap_steward_mut()?;
         let old_data = wrapper.data.clone();
         wrapper.data = new_data;
         Ok(old_data)
