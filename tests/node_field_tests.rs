@@ -161,7 +161,7 @@ fn test_trim_allocator() {
     assert!(storage.next_allocated() == 1);
     
     // Verify mask verification
-    assert!(storage.mask().len() == 1);
+    assert!(storage.allocation_map().len() == 1);
 }
 
 #[test]
@@ -177,14 +177,14 @@ fn test_trim_all_free() {
 
     _ = storage.trim();
 
-    //Verify memory state
+    // Verify memory state
     assert!(matches!(storage.data(0), Err(AccessError::OutOfBoundsMemory(0))));
 
     // Verify allocator state after trim
     assert!(storage.next_allocated() == 0);
     
-    //Verify mask verification
-    assert!(storage.mask().len() == 0);
+    // Verify mask verification
+    assert!(storage.allocation_map().len() == 0);
 }
 
 #[test]
@@ -193,13 +193,13 @@ fn test_trim_empty() {
 
     _ = storage.trim();
 
-    //Verify memory state
+    // Verify memory state
     assert!(matches!(storage.data(0), Err(AccessError::OutOfBoundsMemory(0))));
     
-    //Verify allocator state after trim
+    // Verify allocator state after trim
     assert!(storage.next_allocated() == 0);
     
-    //Verify mask vec
-    assert!(storage.mask().len() == 0);
+    // Verify mask vec
+    assert!(storage.allocation_map().len() == 0);
 }
     

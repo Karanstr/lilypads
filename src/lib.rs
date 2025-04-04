@@ -63,9 +63,10 @@ pub mod prelude {
 
 /// A trait which allows you to customize how indexes are stored on your side of the api
 pub trait Indexable {
-    ///Allows the library to convert your type to its internal [Index] representation
+    /// Allows the library to convert your type to its internal [Index] representation (currently [usize])
     fn to_index(&self) -> Index;
 }
+
 type Index = usize;
 impl Indexable for usize {
     fn to_index(&self) -> Index { *self }
@@ -93,11 +94,11 @@ struct Steward<T> {
     rc : NonZeroUsize,
 }
 impl<T> Steward<T> {
-    pub fn new(data: T) -> Self {
+    fn new(data: T) -> Self {
         Self { data, rc: NonZeroUsize::new(1).unwrap() }
     }
 
-    pub(crate) fn modify_ref(&mut self, delta:isize) -> Result<bool, AccessError> {
+    fn modify_ref(&mut self, delta:isize) -> Result<bool, AccessError> {
         let current = self.rc.get();
         let new_ref_count = match delta.is_negative() {
             true => current.checked_sub(delta.abs() as usize),
@@ -108,7 +109,6 @@ impl<T> Steward<T> {
             None => false
         })
     }
-
 }
     
 /// Used to allocate space on the heap, read from that space, and write to it.
@@ -117,7 +117,7 @@ pub struct NodeField<T:Clone> {
     /// The container used to manage memory
     memory : Vec< Option< Steward<T> > >,
     /// A bitmap of allocated and free memory slots
-    slot_mask : Vec<usize>,
+    allocation_map : Vec<usize>,
 }
 
 // Private methods
@@ -150,7 +150,7 @@ impl<T:Clone> NodeField<T> {
 
     fn first_free(&self) -> Option<Index> {
         let bits_per_cell = usize::BITS as usize;
-        for (cell, mask) in self.slot_mask.iter().enumerate() {
+        for (cell, mask) in self.allocation_map.iter().enumerate() {
             if *mask != usize::MAX {
                 return Some(cell * bits_per_cell + mask.trailing_ones() as usize);
             }
@@ -162,14 +162,14 @@ impl<T:Clone> NodeField<T> {
         let bits_per_cell = usize::BITS as usize;
         let cell = index / bits_per_cell;
         let mask = 1 << (index % bits_per_cell);
-        self.slot_mask[cell] &= !mask;
+        self.allocation_map[cell] &= !mask;
     }
 
     fn mark_reserved(&mut self, index:Index) {
         let bits_per_cell = usize::BITS as usize;
         let cell = index / bits_per_cell;
         let mask = 1 << (index % bits_per_cell);
-        self.slot_mask[cell] |= mask;
+        self.allocation_map[cell] |= mask;
     }
 
     fn release(&mut self, index:Index) -> T {
@@ -189,7 +189,7 @@ impl<T:Clone> NodeField<T> {
             },
             None => {
                 self.memory.push(None);
-                self.slot_mask.push(0);
+                self.allocation_map.push(0);
                 self.last_index()
             }
         };
@@ -210,7 +210,7 @@ impl<T:Clone> NodeField<T> {
     pub fn new() -> Self {
         Self {
             memory : Vec::new(),
-            slot_mask : vec![0],
+            allocation_map : Vec::new(),
         }
     }
 
@@ -317,19 +317,19 @@ impl<T:Clone> NodeField<T> {
         if let Some(first_free) = self.first_free() {
             self.memory.truncate(first_free);
             self.memory.shrink_to_fit();
-            if first_free == 0 { self.slot_mask.clear() } else {
+            if first_free == 0 { self.allocation_map.clear() } else {
                 let cell_bits = usize::BITS as usize;
                 let last_cell = first_free / cell_bits;
-                self.slot_mask.truncate(last_cell + 1);
-                self.slot_mask.shrink_to_fit();
+                self.allocation_map.truncate(last_cell + 1);
+                self.allocation_map.shrink_to_fit();
             }
         }
         remap
     }
 
     /// Returns the current bitfield of allocated/free memory slots
-    pub fn mask(&self) -> &Vec<usize> {
-        &self.slot_mask
+    pub fn allocation_map(&self) -> &Vec<usize> {
+        &self.allocation_map
     }
 
 }
