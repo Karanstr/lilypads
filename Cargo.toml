@@ -1,8 +1,8 @@
 [package]
 name = "vec_mem_heap"
-version = "0.4.1"
-edition = "2021"
-description = "A Vec with each element wrapped in a reference counter."
+version = "0.5.0"
+edition = "2024"
+description = "An arena allocator with reference counting."
 repository = "https://github.com/Karanstr/vec_mem_heap"
 license = "MIT"
 

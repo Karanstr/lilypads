@@ -48,7 +48,6 @@
 
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::mem::replace;
 
 /// Common types and traits exported for convenience.
