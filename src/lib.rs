@@ -96,8 +96,10 @@ enum ReferenceState {
 /// A struct which wraps the data in with a reference count, made public for the purpose of deriving/implementing traits on your side of the API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Steward<T> {
-    data : T,
-    rc : usize,
+    /// The data stored
+    pub data : T,
+    /// The reference count
+    pub rc : usize,
 }
 impl<T> Steward<T> {
     fn new(data: T) -> Self {
