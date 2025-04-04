@@ -51,12 +51,12 @@ use std::mem::replace;
 
 /// Common types and traits exported for convenience.
 /// 
-/// This module re-exports the most commonly used types from this crate.
+/// This module re-exports the essential types and traits.
 /// Import everything from this module with `use vec_mem_heap::prelude::*`.
 pub mod prelude {
     pub use super::{
         NodeField, 
-        Index,
+        Indexable,
         AccessError
     };
 }
@@ -66,15 +66,8 @@ pub trait Indexable {
     ///Allows the library to convert your type to its internal [Index] representation
     fn to_index(&self) -> Index;
 }
-/// A newtype wrapper to represent indexes, the default implementation if you don't want to create your own [Indexable]
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct Index(pub usize);
-impl std::ops::Deref for Index {
-    type Target = usize;
-    fn deref(&self) -> &Self::Target { &self.0 }
-}
-impl Indexable for Index {
+type Index = usize;
+impl Indexable for usize {
     fn to_index(&self) -> Index { *self }
 }
 
@@ -94,68 +87,50 @@ pub enum AccessError {
     OperationFailed,
 }
 
-/// Internal container type(s) for memory management.
-mod containers {
-    use super::*;
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct Steward<T> {
-        pub data : T,
-        pub rc : RefCount,
-    }
-    impl<T> Steward<T> {
-        pub fn new(data: T) -> Self {
-            Self { data, rc: RefCount::new() }
-        }
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[repr(transparent)]
-    pub struct RefCount(NonZeroUsize);
-    impl RefCount {
-        pub(crate) fn new() -> Self {
-            Self(NonZeroUsize::new(1).unwrap())
-        }
-
-        pub(crate) fn modify_ref(&mut self, delta:isize) -> Result<bool, AccessError> {
-            let current = self.0.get();
-            let new_ref_count = match delta.is_negative() {
-                true => current.checked_sub(delta.abs() as usize),
-                false => current.checked_add(delta as usize)
-            }.ok_or(AccessError::ReferenceOverflow)?;
-            Ok( match NonZeroUsize::new(new_ref_count) {
-                Some(count) => { 
-                    self.0 = count; true
-                },
-                None => false
-            })
-        }
-
-        pub fn ref_count(&self) -> NonZeroUsize { self.0 }
-    }
-    
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Steward<T> {
+    data : T,
+    rc : NonZeroUsize,
 }
-use containers::*;
+impl<T> Steward<T> {
+    pub fn new(data: T) -> Self {
+        Self { data, rc: NonZeroUsize::new(1).unwrap() }
+    }
 
+    pub(crate) fn modify_ref(&mut self, delta:isize) -> Result<bool, AccessError> {
+        let current = self.rc.get();
+        let new_ref_count = match delta.is_negative() {
+            true => current.checked_sub(delta.abs() as usize),
+            false => current.checked_add(delta as usize)
+        }.ok_or(AccessError::ReferenceOverflow)?;
+        Ok( match NonZeroUsize::new(new_ref_count) {
+            Some(count) => { self.rc = count; true },
+            None => false
+        })
+    }
+
+}
+    
 /// Used to allocate space on the heap, read from that space, and write to it.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodeField<T:Clone> {
-    /// The container used to manage allocated memory
-    memory : Vec< Option<Steward<T>> >,
+    /// The container used to manage memory
+    memory : Vec< Option< Steward<T> > >,
     /// A bitmap of allocated and free memory slots
-    pub slot_mask : Vec<usize>,
+    slot_mask : Vec<usize>,
 }
 
 // Private methods
 impl<T:Clone> NodeField<T> {
     fn last_index(&self) -> Index {
-        Index(self.memory.len() - 1)
+        self.memory.len() - 1
     }
 
     fn mut_slot(&mut self, index:Index) -> Result<&mut Steward<T>, AccessError> {
+        if self.memory.is_empty() { return Err(AccessError::OutOfBoundsMemory(index)) }
         match index {
             bad_index if index > self.last_index() => Err( AccessError::OutOfBoundsMemory(bad_index) ),
-            index => match &mut self.memory[*index] {
+            index => match &mut self.memory[index] {
                 Some(steward) => Ok( steward ),
                 None => Err( AccessError::FreeMemory(index) ),
             }   
@@ -163,9 +138,10 @@ impl<T:Clone> NodeField<T> {
     }
 
     fn slot(&self, index:Index) -> Result<&Steward<T>, AccessError> {
+        if self.memory.is_empty() { return Err(AccessError::OutOfBoundsMemory(index)) }
         match index {
             bad_index if index > self.last_index() => Err( AccessError::OutOfBoundsMemory(bad_index) ),
-            index => match &self.memory[*index] {
+            index => match &self.memory[index] {
                 Some(steward) => Ok( steward ),
                 None => Err( AccessError::FreeMemory(index) ),
             }
@@ -176,7 +152,7 @@ impl<T:Clone> NodeField<T> {
         let bits_per_cell = usize::BITS as usize;
         for (cell, mask) in self.slot_mask.iter().enumerate() {
             if *mask != usize::MAX {
-                return Some(Index(cell * bits_per_cell + mask.trailing_ones() as usize));
+                return Some(cell * bits_per_cell + mask.trailing_ones() as usize);
             }
         }
         None
@@ -184,30 +160,29 @@ impl<T:Clone> NodeField<T> {
 
     fn mark_free(&mut self, index:Index) {
         let bits_per_cell = usize::BITS as usize;
-        let cell = *index / bits_per_cell;
-        let mask = 1 << (*index % bits_per_cell);
+        let cell = index / bits_per_cell;
+        let mask = 1 << (index % bits_per_cell);
         self.slot_mask[cell] &= !mask;
     }
 
     fn mark_reserved(&mut self, index:Index) {
         let bits_per_cell = usize::BITS as usize;
-        let cell = *index / bits_per_cell;
-        let mask = 1 << (*index % bits_per_cell);
+        let cell = index / bits_per_cell;
+        let mask = 1 << (index % bits_per_cell);
         self.slot_mask[cell] |= mask;
     }
 
     fn release(&mut self, index:Index) -> T {
         self.mark_free(index);
         let Ok(_) = self.mut_slot(index) else { panic!("Tried to release a free/OoB slot"); };
-        self.memory[*index].take().unwrap().data
+        self.memory[index].take().unwrap().data
     }
 
     #[must_use]
     fn reserve(&mut self) -> Index {
-        dbg!(self.first_free());
         let index = match self.first_free() {
             Some(index) => {
-                if index > self.last_index() {
+                if self.memory.is_empty() || index > self.last_index() {
                     self.memory.push(None);
                 }
                 index
@@ -224,7 +199,7 @@ impl<T:Clone> NodeField<T> {
 
 }
 
-//Public functions
+// Public functions
 impl<T:Clone> NodeField<T> {
     /// Constructs a new `NodeField` which can store data of type `T` 
     /// # Example
@@ -235,7 +210,7 @@ impl<T:Clone> NodeField<T> {
     pub fn new() -> Self {
         Self {
             memory : Vec::new(),
-            slot_mask : Vec::new(),
+            slot_mask : vec![0],
         }
     }
 
@@ -254,7 +229,7 @@ impl<T:Clone> NodeField<T> {
     /// 
     /// Failure to properly track references will lead to either freeing data you wanted or leaking data you didn't.
     pub fn add_ref<I:Indexable>(&mut self, index:I) -> Result<(), AccessError> {
-        self.mut_slot(index.to_index())?.rc.modify_ref(1)?;
+        self.mut_slot(index.to_index())?.modify_ref(1)?;
         Ok(())
     }
 
@@ -264,7 +239,7 @@ impl<T:Clone> NodeField<T> {
     /// Failure to properly track references will lead to either freeing data you wanted or leaking data you didn't.
     pub fn remove_ref<I:Indexable>(&mut self, index:I) -> Result<Option<T>, AccessError> {
         let internal_index = index.to_index();
-        match self.mut_slot(internal_index)?.rc.modify_ref(-1)? {
+        match self.mut_slot(internal_index)?.modify_ref(-1)? {
             false => Ok( Some( self.release(internal_index) ) ),
             true => Ok(None)
         }
@@ -272,7 +247,7 @@ impl<T:Clone> NodeField<T> {
 
     /// Returns the number of references the data at `index` has or an [AccessError] if the request has a problem
     pub fn status<I:Indexable>(&self, index:I) -> Result<NonZeroUsize, AccessError> {
-        Ok(self.slot(index.to_index())?.rc.ref_count())
+        Ok(self.slot(index.to_index())?.rc)
     }
 
     /// Pushes `data` into the NodeField, returning the index it was stored at.
@@ -282,7 +257,7 @@ impl<T:Clone> NodeField<T> {
     #[must_use]
     pub fn push(&mut self, data:T) -> Index {
         let index = self.reserve();
-        self.memory[*index] = Some(Steward::new(data));
+        self.memory[index] = Some(Steward::new(data));
         index
     }
 
@@ -293,19 +268,16 @@ impl<T:Clone> NodeField<T> {
         Ok( replace(data, new_data) )
     }
 
-    /// Returns an immutable reference to the internal memory Vec 
-    pub fn internal_memory(&self) -> &Vec< Option<Steward<T>> > { &self.memory } 
-    
     /// Returns the next index which will be allocated on a [NodeField::push] call
     pub fn next_allocated(&self) -> Index { 
-        self.first_free().unwrap_or(Index(self.memory.len()))
+        self.first_free().unwrap_or(self.memory.len())
     }
     
     /// Travels through each slot in the vec checks whether it currently contains data, updating the allocator accordingly. 
     pub fn repair_allocator(&mut self) {
         for i in 0 .. self.memory.len() {
-            self.mark_free(Index(i));
-            if self.memory[i].is_some() { self.mark_reserved(Index(i)) }
+            self.mark_free(i);
+            if self.memory[i].is_some() { self.mark_reserved(i) }
         }
     }
 
@@ -330,10 +302,10 @@ impl<T:Clone> NodeField<T> {
                 free_until -= 1;
                 if free_until == solid_until { break 'defrag }
             }
-            remapped.insert(Index(free_until), Index(solid_until));
+            remapped.insert(free_until, solid_until);
             self.memory.swap(free_until, solid_until);
-            self.mark_free(Index(free_until));
-            self.mark_reserved(Index(solid_until));
+            self.mark_free(free_until);
+            self.mark_reserved(solid_until);
         }
         remapped
     }
@@ -343,9 +315,21 @@ impl<T:Clone> NodeField<T> {
     pub fn trim(&mut self) -> HashMap<Index, Index> {
         let remap = self.defrag();
         if let Some(first_free) = self.first_free() {
-            self.memory.truncate(*first_free);
+            self.memory.truncate(first_free);
+            self.memory.shrink_to_fit();
+            if first_free == 0 { self.slot_mask.clear() } else {
+                let cell_bits = usize::BITS as usize;
+                let last_cell = first_free / cell_bits;
+                self.slot_mask.truncate(last_cell + 1);
+                self.slot_mask.shrink_to_fit();
+            }
         }
         remap
+    }
+
+    /// Returns the current bitfield of allocated/free memory slots
+    pub fn mask(&self) -> &Vec<usize> {
+        &self.slot_mask
     }
 
 }

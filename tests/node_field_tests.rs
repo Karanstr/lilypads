@@ -16,7 +16,7 @@ fn test_error_handling() {
     let idx = storage.push(42);
     
     // Test invalid index
-    assert!(matches!(storage.data(Index(999)), Err(AccessError::OutOfBoundsMemory(_))));
+    assert!(matches!(storage.data(999), Err(AccessError::OutOfBoundsMemory(_))));
     
     // Test double free
     storage.remove_ref(idx).unwrap();
@@ -86,10 +86,10 @@ fn test_repair() {
     
     // Next allocation should use the lowest free index
     let new_idx = storage.push(42);
-    assert_eq!(*new_idx, 1); // Should reuse the first freed slot
+    assert_eq!(new_idx, 1); // Should reuse the first freed slot
     
     let another_idx = storage.push(100);
-    assert_eq!(*another_idx, 3); // Should reuse the second freed slot
+    assert_eq!(another_idx, 3); // Should reuse the second freed slot
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn test_defrag() {
     
     // Defrag and verify remapping
     let remapped = storage.defrag();
-    for (old, new) in remapped.iter() { indices[**old] = *new }
+    for (old, new) in remapped.iter() { indices[*old] = *new }
 
 
     // Verify data is preserved
@@ -123,14 +123,45 @@ fn test_trim() {
     
     // Trim and verify
     let remapped = storage.trim();
-    for (old, new) in remapped.iter() { indices[**old] = *new }
+    for (old, new) in remapped.iter() { indices[*old] = *new }
 
-    assert!(storage.internal_memory().len() <= 3);
+    // Verify memory state after trim
+    assert!(!matches!(storage.data(2), Err(AccessError::OutOfBoundsMemory(_))));
+    assert!(matches!(storage.data(3), Err(AccessError::OutOfBoundsMemory(_))));
+    
+    // Verify allocator state after trim
+    assert!(storage.next_allocated() == 3);
+
     
     // Verify remaining data
     assert_eq!(*storage.data(indices[0]).unwrap(), 0);
     assert_eq!(*storage.data(indices[1]).unwrap(), 1);
     assert_eq!(*storage.data(indices[2]).unwrap(), 2);
+}
+
+#[test]
+fn test_trim_allocator() {
+    let mut storage = NodeField::<i32>::new();
+    
+    // Create a large gap by pushing many values and then freeing most of them
+    let indices: Vec<usize> = (0..100).map(|i| storage.push(i)).collect();
+    for &idx in &indices[0..99] {
+        storage.remove_ref(idx).unwrap();
+    }
+    
+    // Verify the last element is still accessible
+    assert!(storage.data(indices[99]).is_ok());
+    let _ = storage.trim();
+    
+    // Verify memory state after trim
+    assert!(matches!(storage.data(0), Ok(_))); // Last element is now at index 0
+    assert!(matches!(storage.data(1), Err(AccessError::OutOfBoundsMemory(_)))); // No index 1 after trim
+    
+    // Verify allocator state after trim
+    assert!(storage.next_allocated() == 1);
+    
+    // Verify mask verification
+    assert!(storage.mask().len() == 1);
 }
 
 #[test]
@@ -147,8 +178,13 @@ fn test_trim_all_free() {
     _ = storage.trim();
 
     //Verify memory state
-    assert!(storage.internal_memory().is_empty());
-    assert!(storage.next_allocated() == Index(0));
+    assert!(matches!(storage.data(0), Err(AccessError::OutOfBoundsMemory(0))));
+
+    // Verify allocator state after trim
+    assert!(storage.next_allocated() == 0);
+    
+    //Verify mask verification
+    assert!(storage.mask().len() == 0);
 }
 
 #[test]
@@ -158,6 +194,12 @@ fn test_trim_empty() {
     _ = storage.trim();
 
     //Verify memory state
-    assert!(storage.internal_memory().is_empty());
-    assert!(storage.next_allocated() == Index(0));
+    assert!(matches!(storage.data(0), Err(AccessError::OutOfBoundsMemory(0))));
+    
+    //Verify allocator state after trim
+    assert!(storage.next_allocated() == 0);
+    
+    //Verify mask vec
+    assert!(storage.mask().len() == 0);
 }
+    
