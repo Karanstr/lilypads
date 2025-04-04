@@ -73,7 +73,7 @@ fn test_memory_reuse() {
 }
 
 #[test]
-fn test_repair_and_sort() {
+fn test_repair() {
     let mut storage = NodeField::<i32>::new();
     let indices: Vec<_> = (0..5).map(|i| storage.push(i)).collect();
     
@@ -82,7 +82,7 @@ fn test_repair_and_sort() {
     storage.remove_ref(indices[3]).unwrap();
     
     // Should be in order after repair
-    storage.repair_and_sort_allocator();
+    storage.repair_allocator();
     
     // Next allocation should use the lowest free index
     let new_idx = storage.push(42);
@@ -161,4 +161,3 @@ fn test_trim_empty() {
     assert!(storage.internal_memory().is_empty());
     assert!(storage.next_allocated() == Index(0));
 }
-
