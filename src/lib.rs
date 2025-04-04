@@ -335,9 +335,14 @@ impl<T:Clone> NodeField<T> {
         remap
     }
 
-    /// Returns the current bitfield of allocated/free memory slots
+    /// Returns a reference to the current bitfield of allocated/free memory slots
     pub fn allocation_map(&self) -> &Vec<usize> {
         &self.allocation_map
+    }
+
+    /// Returns a reference to the internal memory Vec
+    pub fn memory(&self) -> &Vec< Option< Steward<T> > > {
+        &self.memory
     }
 
 }
