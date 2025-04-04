@@ -8,7 +8,9 @@
 //! 
 //! This crate does not yet support Weak or Atomic references to data, that's on the todo list (maybe).
 //! 
-//! Errors which are caused by external factors are handled, canceling the request and returning an [AccessError].
+//! Errors will cancel the request and returning an [AccessError].
+//! 
+//! Indexing is performed internally using [usize], but you can use any type which implements [Indexable].
 //! 
 //! # Example
 //! ```
@@ -19,27 +21,27 @@
 //!     let mut storage : NodeField<u32> = NodeField::new();
 //! 
 //!     // When you push data into the structure, it returns the index that data was stored at and sets the reference count to 1.
-//!     let data1 = storage.push(15); // data1 == Index(0)
+//!     let data1 = storage.push(15); // data1 == 0
 //!
 //!     {
-//!         let data2 = storage.push(72); // data2 == Index(1)
+//!         let data2 = storage.push(72); // data2 == 1
 //! 
-//!         // Now that a second reference to the data in Index(0) exists, we have to manually add to the reference count.
+//!         // Now that a second reference to the data at index 0 exists, we have to manually add to the reference count.
 //!         let data3 = data1;
 //!         storage.add_ref(data3);
 //!     
 //!         // data2 and data3 are about to go out of scope, so we have to manually remove their references.
-//!         // returns Ok( Some(72) ) -> The data at Index(1) only had one reference, so it was freed.
+//!         // returns Ok( Some(72) ) -> The data at index 1 only had one reference, so it was freed.
 //!         storage.remove_ref(data2);
 //! 
-//!         // returns Ok( None ) -> The data at Index(0) had two references, now one.
+//!         // returns Ok( None ) -> The data at index 0 had two references, now one.
 //!         storage.remove_ref(data3); 
 //!     }
 //! 
-//!     // returns Ok( &15 ) -> The data at Index(0) still has one reference (data1).
+//!     // returns Ok( &15 ) -> The data at index 0 (data1) still has one reference.
 //!     dbg!( storage.data( data1 ) );
-//!     // Err( AccessError::FreeMemory(Index(1)) ) -> The data at Index(1) was freed when its last reference was removed.
-//!     dbg!( storage.data( Index(1) ) );
+//!     // Err( AccessError::FreeMemory(1) ) -> The data at index 1 was freed when its last reference was removed.
+//!     dbg!( storage.data( 1 ) );
 //! 
 //! }
 //! ```
@@ -88,26 +90,33 @@ pub enum AccessError {
     OperationFailed,
 }
 
+enum ReferenceState {
+    Exists,
+    ShouldBeFreed,
+}
+/// A struct which wraps the data in with a reference count, made public for the purpose of deriving/implementing traits on your side of the API
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Steward<T> {
+pub struct Steward<T> {
     data : T,
-    rc : NonZeroUsize,
+    rc : usize,
 }
 impl<T> Steward<T> {
     fn new(data: T) -> Self {
-        Self { data, rc: NonZeroUsize::new(1).unwrap() }
+        Self { data, rc: 1 }
     }
 
-    fn modify_ref(&mut self, delta:isize) -> Result<bool, AccessError> {
-        let current = self.rc.get();
+    // Returns true if the data still exists, false if it should be freed
+    fn modify_ref(&mut self, delta:isize) -> Result<ReferenceState, AccessError> {
+        let current = self.rc;
         let new_ref_count = match delta.is_negative() {
             true => current.checked_sub(delta.abs() as usize),
             false => current.checked_add(delta as usize)
         }.ok_or(AccessError::ReferenceOverflow)?;
-        Ok( match NonZeroUsize::new(new_ref_count) {
-            Some(count) => { self.rc = count; true },
-            None => false
-        })
+        if new_ref_count > 0 { 
+            self.rc = new_ref_count; Ok(ReferenceState::Exists)
+        } else {
+            Ok(ReferenceState::ShouldBeFreed)
+        }
     }
 }
     
@@ -240,13 +249,13 @@ impl<T:Clone> NodeField<T> {
     pub fn remove_ref<I:Indexable>(&mut self, index:I) -> Result<Option<T>, AccessError> {
         let internal_index = index.to_index();
         match self.mut_slot(internal_index)?.modify_ref(-1)? {
-            false => Ok( Some( self.release(internal_index) ) ),
-            true => Ok(None)
+            ReferenceState::ShouldBeFreed => Ok( Some( self.release(internal_index) ) ),
+            ReferenceState::Exists => Ok(None)
         }
     }
 
     /// Returns the number of references the data at `index` has or an [AccessError] if the request has a problem
-    pub fn status<I:Indexable>(&self, index:I) -> Result<NonZeroUsize, AccessError> {
+    pub fn status<I:Indexable>(&self, index:I) -> Result<usize, AccessError> {
         Ok(self.slot(index.to_index())?.rc)
     }
 
