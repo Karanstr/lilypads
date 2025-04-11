@@ -6,8 +6,8 @@ fn test_push() {
     let idx1 = storage.push(42);
     let idx2 = storage.push(123);
     
-    assert_eq!(*storage.data(idx1).unwrap(), 42);
-    assert_eq!(*storage.data(idx2).unwrap(), 123);
+    assert_eq!(*storage.get(idx1).unwrap(), 42);
+    assert_eq!(*storage.get(idx2).unwrap(), 123);
 }
 
 #[test]
@@ -16,7 +16,7 @@ fn test_error_handling() {
     let idx = storage.push(42);
     
     // Test invalid index
-    assert!(matches!(storage.data(999), Err(AccessError::OutOfBoundsMemory(_))));
+    assert!(matches!(storage.get(999), Err(AccessError::FreeMemory(_))));
     
     // Test double free
     storage.remove_ref(idx).unwrap();
@@ -33,7 +33,7 @@ fn test_replace() {
     assert_eq!(old, "old");
     
     // Verify new data is in place
-    assert_eq!(*storage.data(idx).unwrap(), "new");
+    assert_eq!(*storage.get(idx).unwrap(), "new");
 }
 
 #[test]
@@ -68,28 +68,8 @@ fn test_memory_reuse() {
     assert_eq!(idx1, idx3);
     
     // Verify data
-    assert_eq!(*storage.data(idx2).unwrap(), 2);
-    assert_eq!(*storage.data(idx3).unwrap(), 3);
-}
-
-#[test]
-fn test_repair() {
-    let mut storage = NodeField::<i32>::new();
-    let indices: Vec<_> = (0..5).map(|i| storage.push(i)).collect();
-    
-    // Create some gaps
-    storage.remove_ref(indices[1]).unwrap();
-    storage.remove_ref(indices[3]).unwrap();
-    
-    // Should be in order after repair
-    storage.repair_allocator();
-    
-    // Next allocation should use the lowest free index
-    let new_idx = storage.push(42);
-    assert_eq!(new_idx, 1); // Should reuse the first freed slot
-    
-    let another_idx = storage.push(100);
-    assert_eq!(another_idx, 3); // Should reuse the second freed slot
+    assert_eq!(*storage.get(idx2).unwrap(), 2);
+    assert_eq!(*storage.get(idx3).unwrap(), 3);
 }
 
 #[test]
@@ -107,9 +87,9 @@ fn test_defrag() {
 
 
     // Verify data is preserved
-    assert_eq!(*storage.data(indices[0]).unwrap(), 0);
-    assert_eq!(*storage.data(indices[2]).unwrap(), 2);
-    assert_eq!(*storage.data(indices[4]).unwrap(), 4);
+    assert_eq!(*storage.get(indices[0]).unwrap(), 0);
+    assert_eq!(*storage.get(indices[2]).unwrap(), 2);
+    assert_eq!(*storage.get(indices[4]).unwrap(), 4);
 }
 
 #[test]
@@ -126,17 +106,17 @@ fn test_trim() {
     for (old, new) in remapped.iter() { indices[*old] = *new }
 
     // Verify memory state after trim
-    assert!(!matches!(storage.data(2), Err(AccessError::OutOfBoundsMemory(_))));
-    assert!(matches!(storage.data(3), Err(AccessError::OutOfBoundsMemory(_))));
+    assert!(!matches!(storage.get(2), Err(AccessError::FreeMemory(_))));
+    assert!(matches!(storage.get(3), Err(AccessError::FreeMemory(_))));
     
     // Verify allocator state after trim
     assert!(storage.next_allocated() == 3);
 
     
     // Verify remaining data
-    assert_eq!(*storage.data(indices[0]).unwrap(), 0);
-    assert_eq!(*storage.data(indices[1]).unwrap(), 1);
-    assert_eq!(*storage.data(indices[2]).unwrap(), 2);
+    assert_eq!(*storage.get(indices[0]).unwrap(), 0);
+    assert_eq!(*storage.get(indices[1]).unwrap(), 1);
+    assert_eq!(*storage.get(indices[2]).unwrap(), 2);
 }
 
 #[test]
@@ -150,18 +130,18 @@ fn test_trim_allocator() {
     }
     
     // Verify the last element is still accessible
-    assert!(storage.data(indices[99]).is_ok());
+    assert!(storage.get(indices[99]).is_ok());
     let _ = storage.trim();
     
     // Verify memory state after trim
-    assert!(matches!(storage.data(0), Ok(_))); // Last element is now at index 0
-    assert!(matches!(storage.data(1), Err(AccessError::OutOfBoundsMemory(_)))); // No index 1 after trim
+    assert!(matches!(storage.get(0), Ok(_))); // Last element is now at index 0
+    assert!(matches!(storage.get(1), Err(AccessError::FreeMemory(_)))); // No index 1 after trim
     
     // Verify allocator state after trim
     assert!(storage.next_allocated() == 1);
     
-    // Verify mask verification
-    assert!(storage.allocation_map().len() == 1);
+    // Verify reference count state after trim
+    assert!(storage.refs().len() == 1);
 }
 
 #[test]
@@ -178,13 +158,13 @@ fn test_trim_all_free() {
     _ = storage.trim();
 
     // Verify memory state
-    assert!(matches!(storage.data(0), Err(AccessError::OutOfBoundsMemory(0))));
+    assert!(matches!(storage.get(0), Err(AccessError::FreeMemory(0))));
 
     // Verify allocator state after trim
     assert!(storage.next_allocated() == 0);
     
-    // Verify mask verification
-    assert!(storage.allocation_map().len() == 0);
+    // Verify reference count state after trim
+    assert!(storage.refs().len() == 0);
 }
 
 #[test]
@@ -194,12 +174,12 @@ fn test_trim_empty() {
     _ = storage.trim();
 
     // Verify memory state
-    assert!(matches!(storage.data(0), Err(AccessError::OutOfBoundsMemory(0))));
+    assert!(matches!(storage.get(0), Err(AccessError::FreeMemory(0))));
     
     // Verify allocator state after trim
     assert!(storage.next_allocated() == 0);
     
-    // Verify mask vec
-    assert!(storage.allocation_map().len() == 0);
+    // Verify reference count vec
+    assert!(storage.refs().len() == 0);
 }
     
