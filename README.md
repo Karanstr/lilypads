@@ -1,3 +1,4 @@
 # vec_mem_heap
-A reference counting Vec, allowing you to store data and manually track how many 'references' you have to each index.
-Documentation was done hastily, expect stuff like use examples to be added as I feel like it.
+An arena-allocator intended to support efficient creation of tree-like datastructures within Rust's memory model.
+I'm pretty sure the documentation doesn't suck that badly, but if it does complain in issues and I'll fix it.
+Feel free to feature request, stuff like thread safety (atomics) is eventually planned, but first I need to figure out exactly what structure'll best fit my usecase of async read/write.
