@@ -1,6 +1,6 @@
 [package]
 name = "vec_mem_heap"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "An arena allocator with reference counting."
 repository = "https://github.com/Karanstr/vec_mem_heap"

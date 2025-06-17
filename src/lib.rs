@@ -56,10 +56,14 @@ use std::{collections::HashMap, num::NonZeroUsize};
 pub mod prelude {
   pub use super::{
     NodeField, 
-    AccessError
+    AccessError,
+    Nullable,    
   };
 }
 
+/// Trait used to store values in the NodeField. This is to give more control over memory size for
+/// memorytypes which can't be null pointer optimized. If you don't care/know what that means, just
+/// wrap your type in an [Option]
 pub trait Nullable: Eq + Sized {
   /// Sentinel value used to use as null
   const NULLVALUE:Self;
