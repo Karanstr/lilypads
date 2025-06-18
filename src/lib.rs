@@ -1,5 +1,5 @@
 #![warn(missing_docs)]
-//! Fun little virtual memory allocator.
+//! Fun little arena allocator.
 //! 
 //! This is a learning experience for me and should be used with a mountain of salt.
 //! At some point I need to rename it, but I don't have a good one yet.
@@ -16,27 +16,27 @@
 //! 
 //! fn main() {
 //! 
-//!     let mut storage : NodeField<u32> = NodeField::new();
+//!     let mut storage : NodeField<Option<u32>> = NodeField::new();
 //! 
 //!     // When you push data into the structure, it returns the index that data was stored at and sets the reference count to 1.
-//!     let data1 = storage.push(15); // data1 == 0
+//!     let data1 = storage.push(Some(15)); // data1 == 0
 //!
 //!     {
-//!         let data2 = storage.push(72); // data2 == 1
+//!         let data2 = storage.push(Some(72)); // data2 == 1
 //! 
 //!         // Now that a second reference to the data at index 0 exists, we have to manually add to the reference count.
 //!         let data3 = data1;
 //!         storage.add_ref(data3);
 //!     
 //!         // data2 and data3 are about to go out of scope, so we have to manually remove their references.
-//!         // returns Ok( Some(72) ) -> The data at index 1 only had one reference, so it was freed.
+//!         // returns Ok( Some( Some(72) ) ) -> The data at index 1 only had one reference, so it was freed.
 //!         storage.remove_ref(data2);
 //! 
 //!         // returns Ok( None ) -> The data at index 0 had two references, now one.
 //!         storage.remove_ref(data3); 
 //!     }
 //! 
-//!     // returns Ok( &15 ) -> The data at index 0 (data1) still has one reference.
+//!     // returns Ok( &Some(15) ) -> The data at index 0 (data1) still has one reference.
 //!     dbg!( storage.get( data1 ) );
 //!     // Err( AccessError::FreeMemory(1) ) -> The data at index 1 was freed when its last reference was removed.
 //!     dbg!( storage.get( 1 ) );
@@ -54,7 +54,8 @@ use std::collections::HashMap;
 pub mod prelude {
   pub use super::{
     NodeField, 
-    AccessError
+    AccessError,
+    Nullable,
   };
 }
 
@@ -67,17 +68,60 @@ pub enum AccessError {
   ReferenceOverflow,
 }
 
+
+/// Trait any data stored in the NodeField must implement, guaranteeing there's a value we can use as null for uninitialized cells. 
+/// [Option<T>] where T:[Sized] is implemented for you, so if you don't care/understand why you'd
+/// want this just wrap your data in an [Option]
+pub trait Nullable: Sized {
+  //! The main reason you'd manually implement this is if you don't want to deal with a wrapper type eating up your bits and would rather just define a custom null sentinel.
+  //! I could've given is_null a default impl, but I would have to bind Self: Eq.
+  //!
+  //! Implementing Nullable on a wrapper type
+  //! # Example
+  //! ```
+  //! #[derive(Clone, PartialEq, Eq)]
+  //! struct NoZeroU32(u32);
+  //! impl Nullable for NoZeroU32 {
+  //!   const NULL_VAL: Self = NoZeroU32(u32::MAX);
+  //!   fn is_null(&self) -> bool { self != &Self::NULL_VAL }
+  //! }
+  //! ```
+  //!
+  //! Implementing Nullable for Option<T>, this is the canon implementation within this crate
+  //! # Example
+  //! ```
+  //! impl<T> Nullable for Option<T> { 
+  //!   const NULL_VAL: Self = None; 
+  //!   fn is_null(&self) -> bool { self.is_none() }
+  //!   fn take(&mut self) -> Self { self.take() }
+  //! }
+  //! ```
+
+  /// The null sentinel used 
+  const NULL_VAL: Self;
+  /// Returns true if the data matches its type's null condition. In [Option]'s case, this is the same as calling [Option::is_none]
+  fn is_null(&self) -> bool;
+  /// Takes replaces the value at &mut self with Self::NULL_VAL, returning the original value. In [Option]'s case, this is the same as calling [Option::take]
+  fn take(&mut self) -> Self { std::mem::replace(self, Self::NULL_VAL) }
+}
+
+impl<T> Nullable for Option<T> { 
+  const NULL_VAL: Self = None; 
+  fn is_null(&self) -> bool { self.is_none() }
+  fn take(&mut self) -> Self { self.take() }
+}
+
 /// Used to allocate space on the heap, read from that space, and write to it.
 #[derive(Serialize, Deserialize, Debug)]
-pub struct NodeField<T:Clone> {
+pub struct NodeField<T> where T: Nullable {
   /// List of all data stored within this structure
-  data : Vec< Option< T > >,
+  data : Vec< T >,
   /// A reference count for each data slot
   refs : Vec<Option<usize>>,
 }
 
 // Private methods
-impl<T:Clone> NodeField<T> {
+impl<T:Nullable> NodeField<T> {
   fn last_index(&self) -> usize { self.data.len() - 1 }
 
   fn first_free(&self) -> Option<usize> {
@@ -91,17 +135,18 @@ impl<T:Clone> NodeField<T> {
 
   fn mark_reserved(&mut self, idx:usize) { self.refs[idx] = Some(0); }
 
-  fn release(&mut self, index:usize) -> T {
-    if let Some(data) = self.data[index].take() {
-      self.mark_free(index);
+  fn release(&mut self, idx:usize) -> T {
+    let data = self.data[idx].take();
+    if data.is_null() { panic!("Tried to release free slot") } else {
+      self.mark_free(idx);
       data
-    } else { panic!("Tried to release a free slot"); }
+    }
   }
 
   #[must_use]
   fn reserve(&mut self) -> usize {
     let idx = if let Some(idx) = self.first_free() { idx } else {
-      self.data.push(None);
+      self.data.push(T::NULL_VAL);
       self.refs.push(None);
       self.last_index()
     };
@@ -112,13 +157,13 @@ impl<T:Clone> NodeField<T> {
 }
 
 // Public functions
-impl<T:Clone> NodeField<T> {
+impl<T:Nullable> NodeField<T> {
   /// Constructs a new `NodeField` which can store data of type `T` 
   /// # Example
   /// ```
   /// use vec_mem_heap::prelude::*;
   /// //Stores i32s
-  /// let mut storage = NodeField::<i32>::new();
+  /// let mut storage = NodeField::<Option<i32>>::new();
   /// ```
   pub fn new() -> Self {
     Self {
@@ -130,14 +175,14 @@ impl<T:Clone> NodeField<T> {
   /// Returns an immutable reference to the data stored at the requested index, or an [AccessError] if there is a problem.
   pub fn get(&self, idx:usize) -> Result<&T, AccessError> {
     if let Some(data) = self.data.get(idx) {
-      Ok(data.as_ref().unwrap())
+      if data.is_null() { Err(AccessError::FreeMemory(idx)) } else { Ok( data )}
     } else { Err(AccessError::FreeMemory(idx)) }
   }
 
   /// Returns a mutable reference to the data stored at the requested index, or an [AccessError] if there is a problem.
   pub fn get_mut(&mut self, idx:usize) -> Result<&mut T, AccessError> {
     if let Some(data) = self.data.get_mut(idx) {
-      Ok(data.as_mut().unwrap())
+      if data.is_null() { Err(AccessError::FreeMemory(idx)) } else { Ok( data )}
     } else { Err(AccessError::FreeMemory(idx)) }
   }
 
@@ -178,7 +223,7 @@ impl<T:Clone> NodeField<T> {
   #[must_use]
   pub fn push(&mut self, data:T) -> usize {
     let idx = self.reserve();
-    self.data[idx] = Some(data);
+    self.data[idx] = data;
     self.add_ref(idx).unwrap();
     idx
   }
@@ -187,7 +232,7 @@ impl<T:Clone> NodeField<T> {
   /// You may not replace an index which is currently free. 
   pub fn replace(&mut self, idx:usize, new_data:T) -> Result<T, AccessError> {
     if let Some(Some(_)) = self.refs.get(idx) {
-      Ok(self.data[idx].replace(new_data).unwrap())
+      Ok(std::mem::replace(&mut self.data[idx], new_data))
     } else { Err(AccessError::FreeMemory(idx)) }
   }
 
@@ -207,11 +252,11 @@ impl<T:Clone> NodeField<T> {
     if solid_until == self.data.len() { return remapped }
     let mut free_until = self.data.len() - 1;
     'defrag: loop {
-      while let Some(_) = self.data[solid_until] { 
+      while !self.data[solid_until].is_null() { 
         solid_until += 1;
         if solid_until == free_until { break 'defrag }
       }
-      while let None = self.data[free_until] { 
+      while self.data[free_until].is_null() { 
         free_until -= 1;
         if free_until == solid_until { break 'defrag }
       }
@@ -236,8 +281,8 @@ impl<T:Clone> NodeField<T> {
   }
 
   /// Returns a reference to the internal data Vec
-  pub fn data(&self) -> &Vec< Option< T > > { &self.data }
+  pub fn data(&self) -> &Vec<T> { &self.data }
 
   /// Returns a reference to the internal reference Vec
-  pub fn refs(&self) -> &Vec< Option< usize > > { &self.refs }
+  pub fn refs(&self) -> &Vec< Option<usize> > { &self.refs }
 }
