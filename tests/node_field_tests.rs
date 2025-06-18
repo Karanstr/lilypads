@@ -183,3 +183,14 @@ fn test_trim_empty() {
     assert!(storage.refs().len() == 0);
 }
     
+#[test]
+fn stress_test_arena_ref_allocator() {
+  const N: u32 = 300_000;
+  let mut storage = NodeField::new();
+ 
+  // Push a bunch of values into the allocator
+  for i in 0..N {
+    let idx = storage.push(Some(i));
+  }
+}
+
