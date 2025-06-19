@@ -113,7 +113,6 @@ impl FullFlatBinaryTree {
     let mut cur_idx = idx & (!0 << 1); // The last bit is left vs right, the leaf's parent node is at the even index
     if idx & 1 == 0 { self.tree[cur_idx].left = full; } else { self.tree[cur_idx].right = full; }
     let mut combined = self.tree[cur_idx].left & self.tree[cur_idx].right;
-    // Or cur_node's children then walk it up the tree
     for i in 0 .. self.height {
       let step = 1 << i;
       if cur_idx & (1 << (i + 1)) == 0 { 
@@ -132,7 +131,7 @@ impl FullFlatBinaryTree {
 fn test_tree() {
   let mut tree = FullFlatBinaryTree::new(3);
   assert_eq!(tree.get_first_empty_leaf().unwrap(), 0);
-  for i in 0 .. 16 { tree.set_leaf(i, true); }
+  for i in 0 ..= tree.tree.len() { tree.set_leaf(i, true); }
   assert_eq!(tree.get_first_empty_leaf(), None);
   tree.set_leaf(7, false);
   assert_eq!(tree.get_first_empty_leaf().unwrap(), 7);
