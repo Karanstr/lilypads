@@ -44,8 +44,10 @@
 //! }
 //! ```
 
+mod binary_tree;
+use binary_tree::FullFlatBinaryTree;
 use serde::{Serialize, Deserialize};
-use std::{collections::HashMap, fs::read_link};
+use std::collections::HashMap;
 
 /// Datastructure, ErrorEnum, and Required Trait all bundled together for convenience
 /// 
@@ -67,76 +69,6 @@ pub enum AccessError {
   /// Returned when a reference operation causes an over/underflow
   ReferenceOverflow,
 }
-
-#[derive(Clone, Copy, Debug)]
-struct Node {
-  left: bool,
-  right: bool,
-}
-impl Node {
-  fn new() -> Self {
-    Self {
-      left: false, 
-      right: false,
-    }
-  }
-}
-struct FullFlatBinaryTree{
-  pub tree: Vec<Node>,
-  height: u8,
-}
-impl FullFlatBinaryTree {
-  pub fn new(height: u8) -> Self {
-    Self {
-      tree: vec![Node::new(); (1 << (height + 1)) - 1],
-      height
-    }
-  }
-
-  pub fn set_height(&mut self, new_height: u8) {
-    self.height = new_height;
-    self.tree.resize((1 << (new_height + 1)) - 1, Node::new());
-  }
-  
-  pub fn get_first_empty_leaf(&self) -> Option<usize> {
-    let mut cur_idx = (1 << self.height) - 1;
-    for i in (0 .. self.height).rev() {
-      let step = 1 << i;
-      if self.tree[cur_idx].left == false { cur_idx -= step }
-      else if self.tree[cur_idx].right == false { cur_idx += step }
-      else { return None }
-    }
-    Some(cur_idx + self.tree[cur_idx].left as usize)
-  }
-  
-  pub fn set_leaf(&mut self, idx: usize, full: bool) {
-    let mut cur_idx = idx & (!0 << 1); // The last bit is left vs right, the leaf's parent node is at the even index
-    if idx & 1 == 0 { self.tree[cur_idx].left = full; } else { self.tree[cur_idx].right = full; }
-    let mut combined = self.tree[cur_idx].left & self.tree[cur_idx].right;
-    for i in 0 .. self.height {
-      let step = 1 << i;
-      if cur_idx & (1 << (i + 1)) == 0 { 
-        cur_idx += step;
-        self.tree[cur_idx].left = combined;
-      } else {
-        cur_idx -= step;
-        self.tree[cur_idx].right = combined;
-      }
-      combined = self.tree[cur_idx].left & self.tree[cur_idx].right;
-    }
-  }
-}
-
-#[test]
-fn test_tree() {
-  let mut tree = FullFlatBinaryTree::new(3);
-  assert_eq!(tree.get_first_empty_leaf().unwrap(), 0);
-  for i in 0 ..= tree.tree.len() { tree.set_leaf(i, true); }
-  assert_eq!(tree.get_first_empty_leaf(), None);
-  tree.set_leaf(7, false);
-  assert_eq!(tree.get_first_empty_leaf().unwrap(), 7);
-}
-
 
 /// Trait any data stored in the NodeField must implement, guaranteeing there's a value we can use as null for uninitialized cells. 
 /// [Option<T>] where T:[Sized] is implemented for you, so if you don't care/understand why you'd
@@ -188,22 +120,26 @@ pub struct NodeField<T> where T: Nullable {
   data : Vec< T >,
   /// A reference count for each data slot
   refs : Vec<Option<usize>>,
+  /// A binary tree marking whether each cell is free (0) or reserved (1)
+  list: FullFlatBinaryTree
 }
 
 // Private methods
 impl<T:Nullable> NodeField<T> {
+
   fn last_index(&self) -> usize { self.data.len() - 1 }
 
-  fn first_free(&self) -> Option<usize> {
-    for (index, reference) in self.refs.iter().enumerate() {
-      if reference.is_none() { return Some(index) }
-    }
-    None
+  fn first_free(&self) -> Option<usize> { self.list.get_first_empty_leaf() }
+
+  fn mark_free(&mut self, idx:usize) { 
+    self.refs[idx] = None;
+    self.list.set_leaf(idx, false);
   }
 
-  fn mark_free(&mut self, idx:usize) { self.refs[idx] = None; }
-
-  fn mark_reserved(&mut self, idx:usize) { self.refs[idx] = Some(1); }
+  fn mark_reserved(&mut self, idx:usize) {
+    self.refs[idx] = Some(1);
+    self.list.set_leaf(idx, true);
+  }
 
   fn release(&mut self, idx:usize) -> T {
     let data = self.data[idx].take();
@@ -213,11 +149,13 @@ impl<T:Nullable> NodeField<T> {
     }
   }
 
-  /// Right now reserve sets data to have a single reference (through mark_reserved). I haven't
-  /// decided whether this is good or not yet, but for now it's how it'll be
   #[must_use]
   fn reserve(&mut self) -> usize {
-    let idx = if let Some(idx) = self.first_free() { idx } else {
+    let pot_idx = self.first_free();
+    let idx = if pot_idx.is_some() && pot_idx.unwrap() < self.data.len() {
+      pot_idx.unwrap()
+    } else {
+      if pot_idx.is_none() { self.list.set_height(self.list.height() + 1) }
       self.data.push(T::NULL_VAL);
       self.refs.push(None);
       self.last_index()
@@ -241,6 +179,7 @@ impl<T:Nullable> NodeField<T> {
     Self {
       data : Vec::new(),
       refs : Vec::new(),
+      list: FullFlatBinaryTree::new(0),
     }
   }
 
@@ -310,6 +249,9 @@ impl<T:Nullable> NodeField<T> {
   /// Returns the next index which will be allocated on a [NodeField::push] call
   pub fn next_allocated(&self) -> usize { self.first_free().unwrap_or(self.data.len()) }
 
+  // These two functions need to be updated to also fix self.list
+
+
   /// Travels through memory and re-arranges slots so that they are contiguous in memory, with no free slots in between occupied ones.
   /// The hashmap returned can be used to remap your references to their new locations. (Key:Old, Value:New)
   /// 
@@ -357,3 +299,4 @@ impl<T:Nullable> NodeField<T> {
   /// Returns a reference to the internal reference Vec
   pub fn refs(&self) -> &Vec< Option<usize> > { &self.refs }
 }
+
