@@ -73,12 +73,12 @@ pub enum AccessError {
 /// Trait any data stored in the NodeField must implement, guaranteeing there's a value we can use as null for uninitialized cells. 
 /// [Option<T>] where T:[Sized] is implemented for you, so if you don't care/understand why you'd
 /// want this just wrap your data in an [Option]
-pub trait Nullable: Sized {
+pub trait Nullable: Sized + Clone {
   //! The main reason you'd manually implement this is if you don't want to deal with a wrapper type eating up your bits and would rather just define a custom null sentinel.
   //!
   //! # Example
   //! ```
-  //! #[derive(PartialEq)]
+  //! #[derive(PartialEq, Clone)]
   //! struct NoZeroU32(u32);
   //! impl Nullable for NoZeroU32 {
   //!   const NULL_VAL: Self = NoZeroU32(u32::MAX);
@@ -107,7 +107,7 @@ pub trait Nullable: Sized {
   fn take(&mut self) -> Self { std::mem::replace(self, Self::NULL_VAL) }
 }
 
-impl<T> Nullable for Option<T> { 
+impl<T: Clone> Nullable for Option<T> { 
   const NULL_VAL: Self = None; 
   fn is_null(&self) -> bool { self.is_none() }
   fn take(&mut self) -> Self { self.take() }
@@ -180,6 +180,17 @@ impl<T:Nullable> NodeField<T> {
       data : Vec::new(),
       refs : Vec::new(),
       list: FullFlatBinaryTree::new(0),
+    }
+  }
+
+  /// Same as new, except it reserves internal memory for capacity items
+  /// Odds are calling this will actually slow allocation times down, as it's faster to not need to
+  /// bother with the custom allocator when possible, but it's useful for profiling
+  pub fn with_capacity(capacity: usize) -> Self {
+    Self {
+      data : vec![T::NULL_VAL; capacity],
+      refs : vec![None; capacity],
+      list: FullFlatBinaryTree::new(capacity.next_power_of_two().ilog2() as u8),
     }
   }
 

@@ -185,16 +185,16 @@ fn test_trim_empty() {
 
 #[test]
 fn stress_option() {
-  const N: u32 = 300_000;
-  let mut storage = NodeField::new();
+  const N: u32 = 1_000_000;
+  let mut storage = NodeField::with_capacity(N as usize);
 
   // Push a bunch of values into the allocator
   for i in 0..N {
-    let idx = storage.push(Some(i));
+    let _ = storage.push(Some(i));
   }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 struct NoZeroU32(u32);
 impl Nullable for NoZeroU32 {
   const NULL_VAL: Self = NoZeroU32(u32::MAX);
@@ -202,12 +202,12 @@ impl Nullable for NoZeroU32 {
 }
 #[test]
 fn stress_custom() {
-  const N: u32 = 300_000;
-  let mut storage = NodeField::new();
+  const N: u32 = 1_000_000;
+  let mut storage = NodeField::with_capacity(N as usize);
 
   // Push a bunch of values into the allocator
   for i in 0..N {
-    let idx = storage.push(NoZeroU32(i));
+    let _ = storage.push(NoZeroU32(i));
   }
 }
 
