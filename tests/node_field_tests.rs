@@ -194,7 +194,7 @@ fn stress_option() {
   }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq)]
 struct NoZeroU32(u32);
 impl Nullable for NoZeroU32 {
   const NULL_VAL: Self = NoZeroU32(u32::MAX);

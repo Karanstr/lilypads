@@ -45,9 +45,9 @@
 //! ```
 
 use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, fs::read_link};
 
-/// Common types and traits exported for convenience.
+/// Datastructure, ErrorEnum, and Required Trait all bundled together for convenience
 /// 
 /// This module re-exports the essential types and traits.
 /// Import everything from this module with `use vec_mem_heap::prelude::*`.
@@ -68,26 +68,113 @@ pub enum AccessError {
   ReferenceOverflow,
 }
 
+// Ok so here's the plan.
+// We have a binary tree to store set nodes, two bits per node.
+// Updates are simple:
+// Layer(0)[Leaf] = 0 if free, 1 if set
+// Layer(N)[Node].side_set = Layer(N-1).left_set | Layer(N-1).right_set;
+// struct Node {
+// left_set: bool
+// right_set: bool
+// }
+//    [0       1]
+//    / \     / \
+//  [0   0] [1  0]
+// Start at 2^N - 1
+// Increment by 2^(N+1)
+// Nodes = 2^(Height + 1) - 1
+
+#[derive(Clone, Copy, Debug)]
+struct Node {
+  left: bool,
+  right: bool,
+}
+impl Node {
+  fn new() -> Self {
+    Self {
+      left: false, 
+      right: false,
+    }
+  }
+}
+struct FullFlatBinaryTree{
+  pub tree: Vec<Node>,
+  height: u8,
+}
+// Height 0 is the lowest layer, holding a single node
+// Yeah technically I could make get_leaf, but I just don't care, this isn't a structure meant to
+// be conventionally read.
+impl FullFlatBinaryTree {
+  pub fn new(height: u8) -> Self {
+    Self {
+      tree: vec![Node::new(); (1 << (height + 1)) - 1],
+      height
+    }
+  }
+
+  pub fn set_height(&mut self, new_height: u8) { self.height = new_height; }
+  
+  pub fn get_first_empty_leaf(&self) -> Option<usize> {
+    let mut cur_idx = (1 << self.height) - 1;
+    for i in (0 .. self.height).rev() {
+      let step = 1 << i;
+      if self.tree[cur_idx].left == false { cur_idx -= step }
+      else if self.tree[cur_idx].right == false { cur_idx += step }
+      else { return None }
+    }
+    Some(cur_idx + self.tree[cur_idx].left as usize)
+  }
+  
+  // Trusts we're talking about a real index
+  pub fn set_leaf(&mut self, idx: usize, full: bool) {
+    let mut cur_idx = idx & (!0 << 1); // The last bit is left vs right, the leaf's parent node is at the even index
+    if idx & 1 == 0 { self.tree[cur_idx].left = full; } else { self.tree[cur_idx].right = full; }
+    let mut combined = self.tree[cur_idx].left & self.tree[cur_idx].right;
+    // Or cur_node's children then walk it up the tree
+    for i in 0 .. self.height {
+      let step = 1 << i;
+      if cur_idx & (1 << (i + 1)) == 0 { 
+        cur_idx += step;
+        self.tree[cur_idx].left = combined;
+      } else {
+        cur_idx -= step;
+        self.tree[cur_idx].right = combined;
+      }
+      combined = self.tree[cur_idx].left & self.tree[cur_idx].right;
+    }
+  }
+}
+
+#[test]
+fn test_tree() {
+  let mut tree = FullFlatBinaryTree::new(3);
+  assert_eq!(tree.get_first_empty_leaf().unwrap(), 0);
+  tree.set_leaf(0, true);
+  tree.set_leaf(1, true);
+  tree.set_leaf(2, true);
+  assert_eq!(tree.get_first_empty_leaf().unwrap(), 3);
+  tree.set_leaf(1, false);
+  assert_eq!(tree.get_first_empty_leaf().unwrap(), 1);
+}
+
 
 /// Trait any data stored in the NodeField must implement, guaranteeing there's a value we can use as null for uninitialized cells. 
 /// [Option<T>] where T:[Sized] is implemented for you, so if you don't care/understand why you'd
 /// want this just wrap your data in an [Option]
 pub trait Nullable: Sized {
   //! The main reason you'd manually implement this is if you don't want to deal with a wrapper type eating up your bits and would rather just define a custom null sentinel.
-  //! I could've given is_null a default impl, but I would have to bind Self: Eq.
   //!
-  //! Implementing Nullable on a wrapper type
   //! # Example
   //! ```
-  //! #[derive(Clone, PartialEq, Eq)]
+  //! #[derive(PartialEq)]
   //! struct NoZeroU32(u32);
   //! impl Nullable for NoZeroU32 {
   //!   const NULL_VAL: Self = NoZeroU32(u32::MAX);
   //!   fn is_null(&self) -> bool { self != &Self::NULL_VAL }
   //! }
   //! ```
+  //! Implementing Nullable on a wrapper type
   //!
-  //! Implementing Nullable for Option<T>, this is the canon implementation within this crate
   //! # Example
   //! ```
   //! impl<T> Nullable for Option<T> { 
@@ -96,10 +183,13 @@ pub trait Nullable: Sized {
   //!   fn take(&mut self) -> Self { self.take() }
   //! }
   //! ```
+  //! Implementing Nullable for Option<T>, this is the canon implementation within this crate
 
   /// The null sentinel used 
   const NULL_VAL: Self;
   /// Returns true if the data matches its type's null condition. In [Option]'s case, this is the same as calling [Option::is_none]
+  /// I could've provided this with a default impl, but I would have to bind Self: PartialEq and I
+  /// don't want to do that.
   fn is_null(&self) -> bool;
   /// Takes replaces the value at &mut self with Self::NULL_VAL, returning the original value. In [Option]'s case, this is the same as calling [Option::take]
   fn take(&mut self) -> Self { std::mem::replace(self, Self::NULL_VAL) }
@@ -133,7 +223,7 @@ impl<T:Nullable> NodeField<T> {
 
   fn mark_free(&mut self, idx:usize) { self.refs[idx] = None; }
 
-  fn mark_reserved(&mut self, idx:usize) { self.refs[idx] = Some(0); }
+  fn mark_reserved(&mut self, idx:usize) { self.refs[idx] = Some(1); }
 
   fn release(&mut self, idx:usize) -> T {
     let data = self.data[idx].take();
@@ -143,6 +233,8 @@ impl<T:Nullable> NodeField<T> {
     }
   }
 
+  /// Right now reserve sets data to have a single reference (through mark_reserved). I haven't
+  /// decided whether this is good or not yet, but for now it's how it'll be
   #[must_use]
   fn reserve(&mut self) -> usize {
     let idx = if let Some(idx) = self.first_free() { idx } else {
@@ -224,7 +316,6 @@ impl<T:Nullable> NodeField<T> {
   pub fn push(&mut self, data:T) -> usize {
     let idx = self.reserve();
     self.data[idx] = data;
-    self.add_ref(idx).unwrap();
     idx
   }
 
