@@ -68,22 +68,6 @@ pub enum AccessError {
   ReferenceOverflow,
 }
 
-// Ok so here's the plan.
-// We have a binary tree to store set nodes, two bits per node.
-// Updates are simple:
-// Layer(0)[Leaf] = 0 if free, 1 if set
-// Layer(N)[Node].side_set = Layer(N-1).left_set | Layer(N-1).right_set;
-// struct Node {
-// left_set: bool
-// right_set: bool
-// }
-//    [0       1]
-//    / \     / \
-//  [0   0] [1  0]
-// Start at 2^N - 1
-// Increment by 2^(N+1)
-// Nodes = 2^(Height + 1) - 1
-
 #[derive(Clone, Copy, Debug)]
 struct Node {
   left: bool,
@@ -101,9 +85,6 @@ struct FullFlatBinaryTree{
   pub tree: Vec<Node>,
   height: u8,
 }
-// Height 0 is the lowest layer, holding a single node
-// Yeah technically I could make get_leaf, but I just don't care, this isn't a structure meant to
-// be conventionally read.
 impl FullFlatBinaryTree {
   pub fn new(height: u8) -> Self {
     Self {
@@ -112,7 +93,10 @@ impl FullFlatBinaryTree {
     }
   }
 
-  pub fn set_height(&mut self, new_height: u8) { self.height = new_height; }
+  pub fn set_height(&mut self, new_height: u8) {
+    self.height = new_height;
+    self.tree.resize((1 << (new_height + 1)) - 1, Node::new());
+  }
   
   pub fn get_first_empty_leaf(&self) -> Option<usize> {
     let mut cur_idx = (1 << self.height) - 1;
@@ -125,7 +109,6 @@ impl FullFlatBinaryTree {
     Some(cur_idx + self.tree[cur_idx].left as usize)
   }
   
-  // Trusts we're talking about a real index
   pub fn set_leaf(&mut self, idx: usize, full: bool) {
     let mut cur_idx = idx & (!0 << 1); // The last bit is left vs right, the leaf's parent node is at the even index
     if idx & 1 == 0 { self.tree[cur_idx].left = full; } else { self.tree[cur_idx].right = full; }
@@ -149,12 +132,10 @@ impl FullFlatBinaryTree {
 fn test_tree() {
   let mut tree = FullFlatBinaryTree::new(3);
   assert_eq!(tree.get_first_empty_leaf().unwrap(), 0);
-  tree.set_leaf(0, true);
-  tree.set_leaf(1, true);
-  tree.set_leaf(2, true);
-  assert_eq!(tree.get_first_empty_leaf().unwrap(), 3);
-  tree.set_leaf(1, false);
-  assert_eq!(tree.get_first_empty_leaf().unwrap(), 1);
+  for i in 0 .. 16 { tree.set_leaf(i, true); }
+  assert_eq!(tree.get_first_empty_leaf(), None);
+  tree.set_leaf(7, false);
+  assert_eq!(tree.get_first_empty_leaf().unwrap(), 7);
 }
 
 
