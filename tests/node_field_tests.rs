@@ -75,8 +75,7 @@ fn test_memory_reuse() {
 #[test]
 fn test_defrag() {
   let mut storage = NodeField::<Option<i32>>::new();
-  let mut indices: Vec<_> = (0..5).map(|i| storage.push(Some(i))).collect();
-
+  let mut indices: Vec<_> = (0..5).map(|i| storage.push(Some(i)) ).collect();
   // Remove some items to create gaps
   storage.remove_ref(indices[1]).unwrap();
   storage.remove_ref(indices[3]).unwrap();
@@ -93,10 +92,10 @@ fn test_defrag() {
 }
 
 #[test]
-fn test_trim() {
+fn test_trim_normal() {
   let mut storage = NodeField::<Option<i32>>::new();
   let mut indices: Vec<_> = (0..5).map(|i| storage.push(Some(i))).collect();
-
+  
   // Remove last two items
   storage.remove_ref(indices[3]).unwrap();
   storage.remove_ref(indices[4]).unwrap();
@@ -110,7 +109,7 @@ fn test_trim() {
   assert!(matches!(storage.get(3), Err(AccessError::FreeMemory(_))));
 
   // Verify allocator state after trim
-  assert!(storage.next_allocated() == 3);
+  assert_eq!(storage.next_allocated(), 3);
 
 
   // Verify remaining data
@@ -161,10 +160,10 @@ fn test_trim_all_free() {
   assert!(matches!(storage.get(0), Err(AccessError::FreeMemory(0))));
 
   // Verify allocator state after trim
-  assert!(storage.next_allocated() == 0);
+  assert_eq!(storage.next_allocated(), 0);
 
   // Verify reference count state after trim
-  assert!(storage.refs().len() == 0);
+  assert_eq!(storage.refs().len(), 0);
 }
 
 #[test]
@@ -186,7 +185,8 @@ fn test_trim_empty() {
 #[test]
 fn stress_option() {
   const N: u32 = 1_000_000;
-  let mut storage = NodeField::with_capacity(N as usize);
+  let mut storage = NodeField::new();
+  storage.resize(N as usize);
 
   // Push a bunch of values into the allocator
   for i in 0..N {
@@ -203,7 +203,8 @@ impl Nullable for NoZeroU32 {
 #[test]
 fn stress_custom() {
   const N: u32 = 1_000_000;
-  let mut storage = NodeField::with_capacity(N as usize);
+  let mut storage = NodeField::new();
+  storage.resize(N as usize);
 
   // Push a bunch of values into the allocator
   for i in 0..N {

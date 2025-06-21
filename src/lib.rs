@@ -78,6 +78,7 @@ pub trait Nullable: Sized + Clone {
   //!
   //! # Example
   //! ```
+  //! use vec_mem_heap::Nullable;
   //! #[derive(PartialEq, Clone)]
   //! struct NoZeroU32(u32);
   //! impl Nullable for NoZeroU32 {
@@ -88,14 +89,19 @@ pub trait Nullable: Sized + Clone {
   //! Implementing Nullable on a wrapper type
   //!
   //! # Example
-  //! ```
+  //! ```ignore
+  //! use vec_mem_heap::Nullable;
   //! impl<T> Nullable for Option<T> { 
   //!   const NULL_VAL: Self = None; 
   //!   fn is_null(&self) -> bool { self.is_none() }
   //!   fn take(&mut self) -> Self { self.take() }
   //! }
   //! ```
-  //! Implementing Nullable for Option<T>, this is the canon implementation within this crate
+  //! Implementing Nullable for Option<T>, this is the canon implementation within this crate. Due
+  //! to the orphan rule, you actually can't do this without a wrapper in your project :(
+  //!
+  //! If you need a type implemented, complain in issues and I'll learn macros or something like
+  //! that
 
   /// The null sentinel used 
   const NULL_VAL: Self;
@@ -121,13 +127,11 @@ pub struct NodeField<T> where T: Nullable {
   /// A reference count for each data slot
   refs : Vec<Option<usize>>,
   /// A binary tree marking whether each cell is free (0) or reserved (1)
-  list: FullFlatBinaryTree
+  pub list: FullFlatBinaryTree
 }
 
 // Private methods
 impl<T:Nullable> NodeField<T> {
-
-  fn last_index(&self) -> usize { self.data.len() - 1 }
 
   fn first_free(&self) -> Option<usize> { self.list.get_first_empty_leaf() }
 
@@ -152,13 +156,12 @@ impl<T:Nullable> NodeField<T> {
   #[must_use]
   fn reserve(&mut self) -> usize {
     let pot_idx = self.first_free();
-    let idx = if pot_idx.is_some() && pot_idx.unwrap() < self.data.len() {
-      pot_idx.unwrap()
-    } else {
-      if pot_idx.is_none() { self.list.set_height(self.list.height() + 1) }
+    let idx = if pot_idx.is_some() { pot_idx.unwrap() }
+    else {
+      self.list.resize(self.data.len() + 1);
       self.data.push(T::NULL_VAL);
       self.refs.push(None);
-      self.last_index()
+      self.data.len() - 1
     };
     self.mark_reserved(idx);
     idx
@@ -179,19 +182,27 @@ impl<T:Nullable> NodeField<T> {
     Self {
       data : Vec::new(),
       refs : Vec::new(),
-      list: FullFlatBinaryTree::new(0),
+      list: FullFlatBinaryTree::new(),
     }
   }
 
-  /// Same as new, except it reserves internal memory for capacity items
-  /// Odds are calling this will actually slow allocation times down, as it's faster to not need to
-  /// bother with the custom allocator when possible, but it's useful for profiling
-  pub fn with_capacity(capacity: usize) -> Self {
-    Self {
-      data : vec![T::NULL_VAL; capacity],
-      refs : vec![None; capacity],
-      list: FullFlatBinaryTree::new(capacity.next_power_of_two().ilog2() as u8),
-    }
+  /// Returns a reference to the internal data Vec
+  pub fn data(&self) -> &Vec<T> { &self.data }
+
+  /// Returns a reference to the internal reference Vec
+  pub fn refs(&self) -> &Vec< Option<usize> > { &self.refs }
+
+  /// Returns the next index which will be allocated on a [NodeField::push] call
+  pub fn next_allocated(&self) -> usize { self.first_free().unwrap_or(self.data.len()) }
+
+  /// Sets NodeField to hold `size` elements. If size < self.data().len(), excess data will be truncated
+  /// and will be lost. Use care when calling this function.
+  pub fn resize(&mut self, size: usize) {
+    self.data.resize(size, T::NULL_VAL);
+    self.data.shrink_to_fit();
+    self.refs.resize(size, None);
+    self.refs.shrink_to_fit();
+    self.list.resize(size);
   }
 
   /// Returns an immutable reference to the data stored at the requested index, or an [AccessError] if there is a problem.
@@ -257,36 +268,35 @@ impl<T:Nullable> NodeField<T> {
     } else { Err(AccessError::FreeMemory(idx)) }
   }
 
-  /// Returns the next index which will be allocated on a [NodeField::push] call
-  pub fn next_allocated(&self) -> usize { self.first_free().unwrap_or(self.data.len()) }
-
-  // These two functions need to be updated to also fix self.list
-
-
   /// Travels through memory and re-arranges slots so that they are contiguous in memory, with no free slots in between occupied ones.
   /// The hashmap returned can be used to remap your references to their new locations. (Key:Old, Value:New)
   /// 
   /// Slots at the back of memory will be placed in the first free slot, until the above condition is met.
   /// 
-  /// This operation is O(n) to the number of slots in memory.
+  /// This operation is O(KlogN), where K is the number of swaps required to make data contiguous.
+  /// This isn't technically correct, only half the lookups use the binary tree bc I'm silly, but
+  /// it's close enough and if you care that much make an issue and I'll fix it.
+  /// and logN is the height of the internal freetree. Barring degenerate cases where most of your
+  /// free nodes are clumped at the front and most of your data is in the back, this should probably be faster than the O(N) alternative. 
+  /// If you feel differently, make an issue and I'll revive the original linear search function as an alternative
   #[must_use]
   pub fn defrag(&mut self) -> HashMap<usize, usize> {
     let mut remapped = HashMap::new();
-    let mut solid_until = 0;
-    if solid_until == self.data.len() { return remapped }
-    let mut free_until = self.data.len() - 1;
+    if self.data.len() == 0 { return remapped }
+    let mut full_search = self.data.len() - 1;
     'defrag: loop {
-      while !self.data[solid_until].is_null() { 
-        solid_until += 1;
-        if solid_until == free_until { break 'defrag }
-      }
-      while self.data[free_until].is_null() { 
-        free_until -= 1;
-        if free_until == solid_until { break 'defrag }
-      }
-      remapped.insert(free_until, solid_until);
-      self.data.swap(free_until, solid_until);
-      self.refs.swap(free_until, solid_until);
+      if let Some(free) = self.list.get_first_empty_leaf() {
+        while self.data[full_search].is_null() { 
+          if free >= full_search { break 'defrag }
+          full_search -= 1;
+        }
+        if free >= full_search { break 'defrag }
+        remapped.insert(full_search, free);
+        self.data.swap(free, full_search);
+        self.refs.swap(free, full_search);
+        self.list.set_leaf(full_search, false).unwrap();
+        self.list.set_leaf(free, true).unwrap();
+      } else { break 'defrag }
     }
     remapped
   }
@@ -296,18 +306,9 @@ impl<T:Nullable> NodeField<T> {
   pub fn trim(&mut self) -> HashMap<usize, usize> {
     let remap = self.defrag();
     if let Some(first_free) = self.first_free() {
-      self.data.truncate(first_free);
-      self.data.shrink_to_fit();
-      self.refs.truncate(first_free);
-      self.refs.shrink_to_fit();
+      self.resize(first_free)
     }
     remap
   }
-
-  /// Returns a reference to the internal data Vec
-  pub fn data(&self) -> &Vec<T> { &self.data }
-
-  /// Returns a reference to the internal reference Vec
-  pub fn refs(&self) -> &Vec< Option<usize> > { &self.refs }
 }
 
