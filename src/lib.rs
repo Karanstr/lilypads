@@ -1,5 +1,6 @@
 #![warn(missing_docs)]
 //! Fun little arena allocator.
+//! OBJECT POOL, NOT ARENA ALLOCATOR
 //! 
 //! This is a learning experience for me and should be used with a mountain of salt.
 //! At some point I need to rename it, but I don't have a good one yet.
@@ -73,7 +74,7 @@ pub enum AccessError {
 /// Trait any data stored in the NodeField must implement, guaranteeing there's a value we can use as null for uninitialized cells. 
 /// [Option<T>] where T:[Sized] is implemented for you, so if you don't care/understand why you'd
 /// want this just wrap your data in an [Option]
-pub trait Nullable: Sized + Clone {
+pub trait Nullable: Sized {
   //! The main reason you'd manually implement this is if you don't want to deal with a wrapper type eating up your bits and would rather just define a custom null sentinel.
   //!
   //! # Example
@@ -100,8 +101,7 @@ pub trait Nullable: Sized + Clone {
   //! Implementing Nullable for Option<T>, this is the canon implementation within this crate. Due
   //! to the orphan rule, you actually can't do this without a wrapper in your project :(
   //!
-  //! If you need a type implemented, complain in issues and I'll learn macros or something like
-  //! that
+  //! If you need a type implemented, complain in issues
 
   /// The null sentinel used 
   const NULL_VAL: Self;
@@ -121,7 +121,7 @@ impl<T: Clone> Nullable for Option<T> {
 
 /// Used to allocate space on the heap, read from that space, and write to it.
 #[derive(Serialize, Deserialize, Debug)]
-pub struct NodeField<T> where T: Nullable {
+pub struct NodeField<T> where T: Nullable + Clone {
   /// List of all data stored within this structure
   data : Vec< T >,
   /// A reference count for each data slot
@@ -131,7 +131,7 @@ pub struct NodeField<T> where T: Nullable {
 }
 
 // Private methods
-impl<T:Nullable> NodeField<T> {
+impl<T> NodeField<T> where T: Nullable + Clone {
 
   fn first_free(&self) -> Option<usize> { self.list.get_first_empty_leaf() }
 
@@ -170,7 +170,7 @@ impl<T:Nullable> NodeField<T> {
 }
 
 // Public functions
-impl<T:Nullable> NodeField<T> {
+impl<T> NodeField<T> where T: Nullable + Clone {
   /// Constructs a new `NodeField` which can store data of type `T` 
   /// # Example
   /// ```
