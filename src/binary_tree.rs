@@ -93,20 +93,10 @@ impl FullFlatBinaryTree {
   
   pub fn set_leaf(&mut self, idx: usize, full: bool) -> Option<()> {
     if idx >= self.size { return None }
-    self.set(idx, full, 0)
-  }
-
-  pub fn get_leaf(&self, idx: usize) -> Option<bool> {
-    if idx >= self.size { return None }
-    self.get(idx, 0)
-  }
-
-  fn set(&mut self, path: usize, full: bool, steps_from_leaf: u8) -> Option<()> {
-    let mut cur_idx = (path & (!0 << 1)) << steps_from_leaf; // The last bit is left vs right, the leaf's parent node is at the even index
-    if cur_idx > self.capacity { return None } // Prevent out of bound indexing
-    if path & 1 == 0 { self.tree[cur_idx].left = full; } else { self.tree[cur_idx].right = full; }
+    let mut cur_idx = idx & (!0 << 1); // The last bit is left vs right, the leaf's parent node is at the even index
+    if idx & 1 == 0 { self.tree[cur_idx].left = full; } else { self.tree[cur_idx].right = full; }
     let mut combined = self.tree[cur_idx].left & self.tree[cur_idx].right;
-    for i in steps_from_leaf .. self.height {
+    for i in 0 .. self.height {
       let step = 1 << i;
       if cur_idx & (1 << (i + 1)) == 0 { 
         cur_idx += step;
@@ -120,11 +110,12 @@ impl FullFlatBinaryTree {
     Some(())
   }
 
-  fn get(&self, path: usize, steps_from_leaf: u8) -> Option<bool> {
-    let cur_idx = (path & (!0 << 1)) << steps_from_leaf;
-    if cur_idx > self.capacity { return None } // Prevent out of bound indexing
-    Some( if path & 1 == 0 { self.tree[cur_idx].left } else { self.tree[cur_idx].right } )
+  pub fn get_leaf(&self, idx: usize) -> Option<bool> {
+    if idx >= self.size { return None }
+    let cur_idx = idx & (!0 << 1);
+    Some( if idx & 1 == 0 { self.tree[cur_idx].left } else { self.tree[cur_idx].right } )
   }
+
 }
 
 #[test]

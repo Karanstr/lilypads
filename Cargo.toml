@@ -1,8 +1,8 @@
 [package]
 name = "vec_mem_heap"
-version = "0.7.2"
+version = "0.8.0-dev"
 edition = "2024"
-description = "An object pool with reference counting."
+description = "An object pool."
 repository = "https://github.com/Karanstr/vec_mem_heap"
 license = "MIT"
 
