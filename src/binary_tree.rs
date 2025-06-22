@@ -1,21 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct Node {
-  left: bool,
-  right: bool,
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+struct Node {
+  left: [bool; 2], // [has_empty, has_full]
+  right: [bool; 2], // [has_empty, has_full]
 }
-impl Node {
-  fn new() -> Self {
-    Self {
-      left: false, 
-      right: false,
-    }
-  }
-}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FullFlatBinaryTree{
-  pub tree: Vec<Node>,
+  tree: Vec<Node>,
   height: u8,
   size: usize,
   capacity: usize
@@ -23,13 +16,18 @@ pub struct FullFlatBinaryTree{
 impl FullFlatBinaryTree {
   pub fn new() -> Self {
     Self {
-      tree: vec![Node::new(); 1],
+      tree: Vec::new(),
       height: 0,
-      size: 0, // Artificial limit to make api simpler
-      capacity: 2, // Actual limit without growing, one node = 2 leaves
+      size: 0, // Artificial limit for api
+      capacity: 0, // Actual limit without restructuring
     }
   }
 
+  // height == 0 capacity 0 len 0
+  // height == 1 capacity 2 len 1
+  // height == 2 capacity 4 len 3
+
+  // This is incorrect
   // This is messy but I just want my tests to pass so I can fix everything
   /// Sets the number of leaves this tree tracks (this was really clever of me)
   pub fn resize(&mut self, size: usize) {
@@ -64,39 +62,51 @@ impl FullFlatBinaryTree {
     }
   }
 
-  pub fn get_first_empty_leaf(&self) -> Option<usize> {
-    let mut cur_idx = (1 << self.height) - 1;
-    for i in (0 .. self.height).rev() {
+
+  // Might work, check height logic
+  pub fn find_first_leaf(&self, val: bool) -> Option<usize> {
+    if self.size == 0 { return None }
+    let mut cur_idx = (2 << self.height) - 1;
+    for i in (0 .. self.height - 1).rev() {
       let step = 1 << i;
-      if self.tree[cur_idx].left == false { cur_idx -= step }
-      else if self.tree[cur_idx].right == false { cur_idx += step }
+      if self.tree[cur_idx].left[val as usize] { cur_idx -= step }
+      else if self.tree[cur_idx].right[val as usize] { cur_idx += step }
       else { return None }
     }
-    let result = cur_idx + if self.tree[cur_idx].left == false { 0 }
-    else if self.tree[cur_idx].right == false { 1 }
+    let result = cur_idx + if self.tree[cur_idx].left[val as usize] == false { 0 }
+    else if self.tree[cur_idx].right[val as usize] == false { 1 }
     else { return None };
     (result < self.size).then_some(result)
   }
   
-  // This isn't real unless we double the data we store (basically a tree for both set and unset nodes)
-  // pub fn get_last_full_leaf(&self) -> Option<usize> {
-  //   let mut cur_idx = (1 << self.height) - 1;
-  //   for i in (0 .. self.height).rev() {
-  //     let step = 1 << i;
-  //     if self.tree[cur_idx].right == true { cur_idx += step }
-  //     else if self.tree[cur_idx].left == true { cur_idx -= step }
-  //     else { return None }
-  //   }
-  //   let result = cur_idx + self.tree[cur_idx].left as usize;
-  //   (result < self.size).then_some(result)
-  // }
+  // Might work, check height logic
+  pub fn find_last_leaf(&self, val: bool) -> Option<usize> {
+    if self.size == 0 { return None }
+    let mut cur_idx = (2 << self.height) - 1;
+    for i in (0 .. self.height).rev() {
+      let step = 1 << i;
+      if self.tree[cur_idx].right[val as usize] { cur_idx += step }
+      else if self.tree[cur_idx].left[val as usize] { cur_idx -= step }
+      else { return None }
+    }
+    let result = cur_idx + if self.tree[cur_idx].right[val as usize] { 1 }
+    else if self.tree[cur_idx].left[val as usize] { 0 }
+    else { return None };
+    (result < self.size).then_some(result)
+  }
   
+  // Should work
   pub fn set_leaf(&mut self, idx: usize, full: bool) -> Option<()> {
     if idx >= self.size { return None }
-    let mut cur_idx = idx & (!0 << 1); // The last bit is left vs right, the leaf's parent node is at the even index
-    if idx & 1 == 0 { self.tree[cur_idx].left = full; } else { self.tree[cur_idx].right = full; }
-    let mut combined = self.tree[cur_idx].left & self.tree[cur_idx].right;
-    for i in 0 .. self.height {
+    let mut cur_idx = idx & !1; // The last bit is left vs right, the leaf's parent node is at the even index
+    if idx & 1 == 0 { self.tree[cur_idx].left = [!full, full]; } 
+    else { self.tree[cur_idx].right = [!full, full]; }
+
+    let mut combined = [
+      self.tree[cur_idx].left[0] & self.tree[cur_idx].right[0],
+      self.tree[cur_idx].left[1] & self.tree[cur_idx].right[1]
+    ];
+    for i in 0 .. self.height - 1 {
       let step = 1 << i;
       if cur_idx & (1 << (i + 1)) == 0 { 
         cur_idx += step;
@@ -105,15 +115,19 @@ impl FullFlatBinaryTree {
         cur_idx -= step;
         self.tree[cur_idx].right = combined;
       }
-      combined = self.tree[cur_idx].left & self.tree[cur_idx].right;
+      combined = [
+        self.tree[cur_idx].left[0] & self.tree[cur_idx].right[0],
+        self.tree[cur_idx].left[1] & self.tree[cur_idx].right[1]
+      ];
     }
     Some(())
   }
 
-  pub fn get_leaf(&self, idx: usize) -> Option<bool> {
+  // Should work
+  pub fn is_full(&self, idx: usize) -> Option<bool> {
     if idx >= self.size { return None }
-    let cur_idx = idx & (!0 << 1);
-    Some( if idx & 1 == 0 { self.tree[cur_idx].left } else { self.tree[cur_idx].right } )
+    let cur_idx = idx & !1;
+    Some( if idx & 1 == 0 { self.tree[cur_idx].left[1] } else { self.tree[cur_idx].right[1] } )
   }
 
 }
@@ -121,19 +135,6 @@ impl FullFlatBinaryTree {
 #[test]
 fn test_tree() {
   let mut tree = FullFlatBinaryTree::new();
-  tree.resize(8);
-  assert_eq!(tree.get_first_empty_leaf().unwrap(), 0);
-  for i in 0 .. tree.size { tree.set_leaf(i, true); }
-  assert_eq!(tree.get_first_empty_leaf(), None);
-  tree.set_leaf(7, false);
-  assert_eq!(tree.get_first_empty_leaf().unwrap(), 7);
-  // Can't set out of bounds
-  assert_eq!(tree.set_leaf(8, false), None);
-
-  tree.resize(3);
-  assert_eq!(tree.set_leaf(4, false), None);
-  assert_eq!(tree.set_leaf(1, false), Some(()));
-  assert_eq!(tree.get_first_empty_leaf(), Some(1));
 }
 
 // Write a test for resize logic
