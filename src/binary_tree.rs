@@ -1,14 +1,22 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-struct Node {
+pub struct Node {
   left: [bool; 2], // [has_empty, has_full]
   right: [bool; 2], // [has_empty, has_full]
+}
+impl Node {
+  fn new() -> Self {
+    Self {
+      left: [true, false],
+      right: [true, false],
+    }
+  }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FullFlatBinaryTree{
-  tree: Vec<Node>,
+  pub tree: Vec<Node>,
   height: u8,
   size: usize,
   capacity: usize
@@ -27,62 +35,49 @@ impl FullFlatBinaryTree {
   // height == 1 capacity 2 len 1
   // height == 2 capacity 4 len 3
 
-  // This is incorrect
-  // This is messy but I just want my tests to pass so I can fix everything
   /// Sets the number of leaves this tree tracks (this was really clever of me)
   pub fn resize(&mut self, size: usize) {
-    let old_size = self.size;
-    // let shrinking = self.size > size;
     if self.size == size { return }
-    self.size = size;
-    // This is stupid and what I get when I cheat and add edge cases. This problem goes away once I replace the struct
-    self.capacity = self.size.next_power_of_two().max(2); // How many leaves we can handle
-    self.height = (self.capacity >> 1).ilog2() as u8;
-    if old_size > self.size && self.size != 0 {
-      let last_safe_idx = self.size - 1;
-      let last_val = self.get_leaf(last_safe_idx).unwrap();
-      self.tree.truncate(self.size - 1); // Eliminate any now-invalid data
-      self.tree.resize(self.capacity - 1, Node::new()); // Replace culled architecture
-      self.set_leaf(last_safe_idx, last_val); // Restore the path lost in the cull
+    else if size < self.size {
+      let last_safe_idx = size.saturating_sub(1);
+      let last_val = self.is_full(last_safe_idx);
+      self.size = size;
+      self.capacity = if self.size == 0 { 0 } else { self.size.next_power_of_two() };
+      self.height = (self.capacity >> 1).ilog2() as u8;
+      self.tree.truncate(self.size.saturating_sub(1)); // Eliminate any now-invalid data
+      self.tree.resize(self.capacity.saturating_sub(1), Node::new()); // Replace culled architecture
+      if let Some(val) = last_val { self.set_leaf(last_safe_idx, val); } // Restore path lost in cull
       self.tree.shrink_to_fit();
     }
-    else if old_size > self.size {
-      self.tree.truncate(0); // Eliminate any now-invalid data
-      self.tree.resize(self.capacity - 1, Node::new()); // Replace culled architecture
-      self.tree.shrink_to_fit();
-    }
-    else if old_size == 0 {
-      self.tree.resize(self.capacity - 1, Node::new());
-    }
-    else {
-      let last_old_idx = old_size - 1;
-      let last_val = self.get_leaf(last_old_idx).unwrap();
-      self.tree.resize(self.capacity - 1, Node::new());
-      self.set_leaf(last_old_idx, last_val);
+    else if size > self.size {
+      let last_old_idx = self.size.saturating_sub(1);
+      let last_val = self.is_full(last_old_idx);
+      self.size = size;
+      self.capacity = if self.size == 0 { 0 } else { self.size.next_power_of_two() };
+      self.height = (self.capacity >> 1).ilog2() as u8;
+      self.tree.resize(self.capacity.saturating_sub(1), Node::new());
+      if let Some(val) = last_val { self.set_leaf(last_old_idx, val); }
     }
   }
 
-
-  // Might work, check height logic
   pub fn find_first_leaf(&self, val: bool) -> Option<usize> {
     if self.size == 0 { return None }
-    let mut cur_idx = (2 << self.height) - 1;
-    for i in (0 .. self.height - 1).rev() {
+    let mut cur_idx = (self.capacity >> 1) - 1;
+    for i in (0 .. self.height).rev() {
       let step = 1 << i;
       if self.tree[cur_idx].left[val as usize] { cur_idx -= step }
       else if self.tree[cur_idx].right[val as usize] { cur_idx += step }
       else { return None }
     }
-    let result = cur_idx + if self.tree[cur_idx].left[val as usize] == false { 0 }
-    else if self.tree[cur_idx].right[val as usize] == false { 1 }
+    let result = cur_idx + if self.tree[cur_idx].left[val as usize] { 0 }
+    else if self.tree[cur_idx].right[val as usize] { 1 }
     else { return None };
     (result < self.size).then_some(result)
   }
   
-  // Might work, check height logic
   pub fn find_last_leaf(&self, val: bool) -> Option<usize> {
     if self.size == 0 { return None }
-    let mut cur_idx = (2 << self.height) - 1;
+    let mut cur_idx = (self.capacity >> 1) - 1;
     for i in (0 .. self.height).rev() {
       let step = 1 << i;
       if self.tree[cur_idx].right[val as usize] { cur_idx += step }
@@ -95,18 +90,16 @@ impl FullFlatBinaryTree {
     (result < self.size).then_some(result)
   }
   
-  // Should work
   pub fn set_leaf(&mut self, idx: usize, full: bool) -> Option<()> {
     if idx >= self.size { return None }
     let mut cur_idx = idx & !1; // The last bit is left vs right, the leaf's parent node is at the even index
     if idx & 1 == 0 { self.tree[cur_idx].left = [!full, full]; } 
     else { self.tree[cur_idx].right = [!full, full]; }
-
     let mut combined = [
-      self.tree[cur_idx].left[0] & self.tree[cur_idx].right[0],
-      self.tree[cur_idx].left[1] & self.tree[cur_idx].right[1]
+      self.tree[cur_idx].left[0] | self.tree[cur_idx].right[0],
+      self.tree[cur_idx].left[1] | self.tree[cur_idx].right[1]
     ];
-    for i in 0 .. self.height - 1 {
+    for i in 0 .. self.height {
       let step = 1 << i;
       if cur_idx & (1 << (i + 1)) == 0 { 
         cur_idx += step;
@@ -116,14 +109,13 @@ impl FullFlatBinaryTree {
         self.tree[cur_idx].right = combined;
       }
       combined = [
-        self.tree[cur_idx].left[0] & self.tree[cur_idx].right[0],
-        self.tree[cur_idx].left[1] & self.tree[cur_idx].right[1]
+        self.tree[cur_idx].left[0] | self.tree[cur_idx].right[0],
+        self.tree[cur_idx].left[1] | self.tree[cur_idx].right[1]
       ];
     }
     Some(())
   }
 
-  // Should work
   pub fn is_full(&self, idx: usize) -> Option<bool> {
     if idx >= self.size { return None }
     let cur_idx = idx & !1;
@@ -135,8 +127,17 @@ impl FullFlatBinaryTree {
 #[test]
 fn test_tree() {
   let mut tree = FullFlatBinaryTree::new();
+  tree.resize(5);
+  
+  // Test basic setting
+  assert_eq!(tree.is_full(0).unwrap(), false);
+  tree.set_leaf(0, true);
+  assert_eq!(tree.is_full(0).unwrap(), true);
+  dbg!(&tree.tree);
+
+  assert_eq!(tree.find_first_leaf(false).unwrap(), 1);
+  assert_eq!(tree.find_last_leaf(false).unwrap(), 5);
+
+
 }
-
-// Write a test for resize logic
-
 
