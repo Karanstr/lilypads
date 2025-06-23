@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
+// use serde::{Deserialize, Serialize};
 
 const NEW_NODE: [[bool; 2]; 2] = [[true, false]; 2];
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug,)]// Serialize, Deserialize)]
 pub struct BinaryTree {
   tree: Vec<[[bool; 2]; 2]>, // [[left_has_empty, left_has_full], [right_has_empty, right_has_full]]
   height: u8,
@@ -28,7 +28,7 @@ impl BinaryTree {
     let last_safe_idx = size.min(self.size).saturating_sub(1);
     let last_val = self.is_full(last_safe_idx);
     let new_capacity = if size == 0 { 0 } else { size.next_power_of_two().max(2) };
-    self.height = (new_capacity >> 1).ilog2() as u8;
+    self.height = if new_capacity == 0 { 0 } else { (new_capacity >> 1).ilog2() as u8 };
     self.tree.truncate(size.saturating_sub(1)); // Eliminate any now-invalid data (decreasing only)
     self.tree.resize(new_capacity.saturating_sub(1), NEW_NODE); // Replace architecture
     self.size = size;
@@ -36,38 +36,35 @@ impl BinaryTree {
     self.tree.shrink_to_fit();
   }
 
-  pub fn find_first_leaf(&self, full: bool) -> Option<usize> {
+  // Don't call this function with false, false
+  fn find_leaf(&self, first: bool, full: bool) -> Option<usize> {
+    let preffered = !first as usize;
+    let secondary = first as usize;
     if self.size == 0 { return None }
     let mut cur_idx = self.root();
     for i in (0 .. self.height).rev() {
       let step = 1 << i;
-      if self.tree[cur_idx][0][full as usize] { cur_idx -= step }
-      else if self.tree[cur_idx][1][full as usize] { cur_idx += step }
-      else { return None }
+      if preffered == 0 {
+        if self.tree[cur_idx][0][full as usize] { cur_idx -= step }
+        else if self.tree[cur_idx][1][full as usize] { cur_idx += step }
+        else { return None }
+      } 
+      else {
+        if self.tree[cur_idx][1][full as usize] { cur_idx += step }
+        else if self.tree[cur_idx][0][full as usize] { cur_idx -= step }
+        else { return None }
+      }
     }
-    let result = cur_idx + if self.tree[cur_idx][0][full as usize] { 0 }
-    else if self.tree[cur_idx][1][full as usize] { 1 }
+    let result = cur_idx + if self.tree[cur_idx][preffered][full as usize] { preffered }
+    else if self.tree[cur_idx][secondary][full as usize] { secondary }
     else { return None };
     (result < self.size).then_some(result)
   }
-  
-  /// # WARNING 
-  /// Calling find_last_leaf(false) will return None unless self.size == self.capacity()
-  pub fn find_last_leaf(&self, full: bool) -> Option<usize> {
-    if self.size == 0 { return None }
-    let mut cur_idx = self.root();
-    for i in (0 .. self.height).rev() {
-      let step = 1 << i;
-      if self.tree[cur_idx][1][full as usize] { cur_idx += step }
-      else if self.tree[cur_idx][0][full as usize] { cur_idx -= step }
-      else { return None }
-    }
-    let result = cur_idx + if self.tree[cur_idx][1][full as usize] { 1 }
-    else if self.tree[cur_idx][0][full as usize] { 0 }
-    else { return None };
-    (result < self.size).then_some(result)
-  }
-  
+
+  pub fn find_first_full(&self) -> Option<usize> { self.find_leaf(true, true)}
+  pub fn find_first_free(&self) -> Option<usize> { self.find_leaf(true, false)}
+  pub fn find_last_full(&self) -> Option<usize> { self.find_leaf(false, true)}
+
   pub fn set_leaf(&mut self, idx: usize, full: bool) -> Option<()> {
     if idx >= self.size { return None }
     let mut step = 1;
@@ -122,9 +119,9 @@ fn paths() {
   tree.set_leaf(1, true);
   tree.set_leaf(6, true);
 
-  assert_eq!(tree.find_first_leaf(false).unwrap(), 2);
-  assert_eq!(tree.find_first_leaf(true).unwrap(), 0);
-  assert_eq!(tree.find_last_leaf(true).unwrap(), 6);
+  assert_eq!(tree.find_first_free().unwrap(), 2);
+  assert_eq!(tree.find_first_full().unwrap(), 0);
+  assert_eq!(tree.find_last_full().unwrap(), 6);
 }
 
 #[test]
@@ -140,8 +137,8 @@ fn resize() {
   tree.resize(8);
   assert_eq!(tree.is_full(6).unwrap(), false); // The 6 was reset as it's out of bounds
   assert_eq!(tree.is_full(4).unwrap(), true); // The 4 wasn't because it remained in bounds
-  assert_eq!(tree.find_first_leaf(true).unwrap(), 4);
-  assert_eq!(tree.find_last_leaf(true).unwrap(), 4);
+  assert_eq!(tree.find_leaf(true, true).unwrap(), 4);
+  assert_eq!(tree.find_leaf(false, true).unwrap(), 4);
 
 }
 

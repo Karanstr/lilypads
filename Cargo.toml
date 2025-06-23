@@ -1,10 +1,10 @@
 [package]
 name = "vec_mem_heap"
-version = "0.8.0-dev"
+version = "0.8.0-dev.noserde"
 edition = "2024"
-description = "An object pool."
+description = "Fun little object pool."
 repository = "https://github.com/Karanstr/vec_mem_heap"
 license = "MIT"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
+# serde = { version = "1.0", features = ["derive"] }

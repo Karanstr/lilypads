@@ -1,26 +1,25 @@
 mod binary_tree;
-use binary_tree::FullFlatBinaryTree;
+use binary_tree::BinaryTree;
 // use serde::{Serialize, Deserialize};
-// use std::collections::HashMap;
+use std::collections::HashMap;
 use std::mem::MaybeUninit;
 
 #[derive(Debug)]
 pub struct NodeField<T> {
   data : Vec< MaybeUninit<T> >,
-  list: FullFlatBinaryTree
+  list: BinaryTree,
 }
-
 // Private methods
 impl<T> NodeField<T> {
 
   fn is_reserved(&self, idx: usize) -> bool {
-    match self.list.get_leaf(idx) {
+    match self.list.is_full(idx) {
       Some(result) => result,
       None => false
     }
   }
 
-  fn first_free(&self) -> Option<usize> { self.list.get_first_empty_leaf() }
+  fn first_free(&self) -> Option<usize> { self.list.find_first_free() }
 
   fn mark_free(&mut self, idx:usize) { self.list.set_leaf(idx, false).unwrap(); }
 
@@ -42,13 +41,12 @@ impl<T> NodeField<T> {
   }
 
 }
-
 // Public functions
 impl<T> NodeField<T> {
   pub fn new() -> Self {
     Self {
       data : Vec::new(),
-      list: FullFlatBinaryTree::new(),
+      list: BinaryTree::new(),
     }
   }
 
@@ -59,13 +57,11 @@ impl<T> NodeField<T> {
   /// and dropped. Use care when calling this function.
   pub fn resize(&mut self, size: usize) {
     let additional = size.saturating_sub(self.data.len());
-    // If we don't free each set cell manually, it won't get dropped and we'll leak whatever
-    // resources they owned
-    // while let Some(idx) = self.list.get_last_full_node() {
-      // if idx < size { break }
-      // // Releases the value from the vec, then drops it when we loop and the scope resets.
-      // self.free(idx);
-    // }
+    while let Some(idx) = self.list.find_last_full() {
+      if idx < size { break }
+      // Releases the value from the vec, then drops it when we loop and the scope resets.
+      self.free(idx);
+    }
     self.data.reserve(additional);
     unsafe { self.data.set_len(size); }
 
@@ -109,51 +105,40 @@ impl<T> NodeField<T> {
     Some(old_value)
   }
 
+  /// Travels through memory and re-arranges slots so that they are contiguous in memory, with no free slots in between occupied ones.
+  /// The hashmap returned can be used to remap your references to their new locations. (Key:Old, Value:New)
+  /// 
+  /// Slots at the back of memory will be placed in the first free slot, until the above condition is met.
+  /// 
+  /// This operation is O(KlogN), where K is the number of swaps required to make data contiguous
+  /// and logN is the height of the internal freetree. Barring degenerate cases where most of your
+  /// free nodes are clumped at the front and most of your data is in the back, this should probably be faster than the O(N) alternative. 
+  /// If you feel differently, make an issue and I'll revive the original linear search function as an alternative
+  #[must_use]
+  pub fn defrag(&mut self) -> HashMap<usize, usize> {
+    let mut remapped = HashMap::new();
+    if self.data.len() == 0 { return remapped }
+    'defrag: loop {
+      match (self.list.find_first_free(), self.list.find_last_full()) {
+        (Some(free), Some(full)) => {
+          if free >= full { break 'defrag }
+          remapped.insert(full, free);
+          self.data.swap(free, full);
+          self.list.set_leaf(full, false).unwrap();
+          self.list.set_leaf(free, true).unwrap();
+        }
+        _ => break 'defrag
+      }
+    }
+    remapped
+  }
+
+  /// [NodeField::defrag]s the memory, then shrinks the internal vec to fit remaining data.
+  #[must_use]
+  pub fn trim(&mut self) -> HashMap<usize, usize> {
+    let remap = self.defrag();
+    if let Some(first_free) = self.first_free() { self.resize(first_free) }
+    remap
+  }
 }
 
-
-// This all has to be rewritten once I finish fixing the binarytree
-
-  // /// Travels through memory and re-arranges slots so that they are contiguous in memory, with no free slots in between occupied ones.
-  // /// The hashmap returned can be used to remap your references to their new locations. (Key:Old, Value:New)
-  // /// 
-  // /// Slots at the back of memory will be placed in the first free slot, until the above condition is met.
-  // /// 
-  // /// This operation is O(KlogN), where K is the number of swaps required to make data contiguous.
-  // /// This isn't technically correct, only half the lookups use the binary tree bc I'm silly, but
-  // /// it's close enough and if you care that much make an issue and I'll fix it.
-  // /// and logN is the height of the internal freetree. Barring degenerate cases where most of your
-  // /// free nodes are clumped at the front and most of your data is in the back, this should probably be faster than the O(N) alternative. 
-  // /// If you feel differently, make an issue and I'll revive the original linear search function as an alternative
-//   #[must_use]
-//   pub fn defrag(&mut self) -> HashMap<usize, usize> {
-//     let mut remapped = HashMap::new();
-//     if self.data.len() == 0 { return remapped }
-//     let mut full_search = self.data.len() - 1;
-//     'defrag: loop {
-//       if let Some(free) = self.list.get_first_empty_leaf() {
-//         while self.data[full_search].is_null() { 
-//           if free >= full_search { break 'defrag }
-//           full_search -= 1;
-//         }
-//         if free >= full_search { break 'defrag }
-//         remapped.insert(full_search, free);
-//         self.data.swap(free, full_search);
-//         self.list.set_leaf(full_search, false).unwrap();
-//         self.list.set_leaf(free, true).unwrap();
-//       } else { break 'defrag }
-//     }
-//     remapped
-//   }
-//
-//   /// [NodeField::defrag]s the memory, then shrinks the internal memory Vec to the size of the block of occupied memory.
-//   #[must_use]
-//   pub fn trim(&mut self) -> HashMap<usize, usize> {
-//     let remap = self.defrag();
-//     if let Some(first_free) = self.first_free() {
-//       self.resize(first_free)
-//     }
-//     remap
-//   }
-// }
-//
