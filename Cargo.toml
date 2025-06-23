@@ -1,9 +1,9 @@
 [package]
-name = "vec_mem_heap"
-version = "0.8.0-dev.noserde"
+name = "lilypads"
+version = "0.8.0"
 edition = "2024"
-description = "Fun little object pool."
-repository = "https://github.com/Karanstr/vec_mem_heap"
+description = "Fun little object pool allocator."
+repository = "https://github.com/Karanstr/lilypads"
 license = "MIT"
 
 [dependencies]
