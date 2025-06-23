@@ -68,19 +68,20 @@ impl BinaryTree {
     (result < self.size).then_some(result)
   }
   
-  pub fn set_leaf(&mut self, mut idx: usize, full: bool) -> Option<()> {
+  pub fn set_leaf(&mut self, idx: usize, full: bool) -> Option<()> {
     if idx >= self.size { return None }
     let mut step = 1;
-    self.tree[idx][idx & step] = [!full, full];
+    let mut cur_idx = idx & !1;
+    self.tree[cur_idx][idx & step] = [!full, full];
     for _ in 0 .. self.height {
-      // Positive step if we're on the left, negative step if we're on the right
-      idx = if (idx & (step << 1)) == 0 { idx + step } else { idx - step };
       let combined = [
-        self.tree[idx][0][0] | self.tree[idx][1][0],
-        self.tree[idx][0][1] | self.tree[idx][1][1]
+        self.tree[cur_idx][0][0] | self.tree[cur_idx][1][0],
+        self.tree[cur_idx][0][1] | self.tree[cur_idx][1][1]
       ];
+      let left = idx & (step << 1) == 0;
+      cur_idx = if left { cur_idx + step } else { cur_idx - step };
+      self.tree[cur_idx][!left as usize] = combined;
       step <<= 1;
-      self.tree[idx][idx & step] = combined;
     }
     Some(())
   }
@@ -92,27 +93,55 @@ impl BinaryTree {
 
 }
 
+// Because we have O(1) read times, we can't verify the path is created the easy way
 #[test]
-fn test_tree() {
+fn write() {
+  let mut tree = BinaryTree::new();
+  tree.resize(7);
+
+  // Does setting work correctly
+  tree.set_leaf(1, true);
+  assert_eq!(tree.is_full(1).unwrap(), true);
+
+  // Make sure setting and unsetting work
+  tree.set_leaf(3, true);
+  assert_eq!(tree.is_full(3).unwrap(), true);
+  tree.set_leaf(3, false);
+  assert_eq!(tree.is_full(3).unwrap(), false);
+
+  // Do we correctly catch sets outside of bounds
+  assert_eq!(tree.set_leaf(7, false), None);
+}
+
+#[test]
+fn read() {
+  let mut tree = BinaryTree::new();
+  tree.resize(8);
+
+  tree.set_leaf(0, true);
+  tree.set_leaf(1, true);
+  tree.set_leaf(6, true);
+
+  assert_eq!(tree.find_first_leaf(false).unwrap(), 2);
+  assert_eq!(tree.find_first_leaf(true).unwrap(), 0);
+  assert_eq!(tree.find_last_leaf(true).unwrap(), 6);
+}
+
+#[test]
+fn resize() {
   let mut tree = BinaryTree::new();
   tree.resize(8);
   
-  // Test basic setting
-  assert_eq!(tree.is_full(0).unwrap(), false);
-  tree.set_leaf(0, true);
-  assert_eq!(tree.is_full(0).unwrap(), true);
-
-  assert_eq!(tree.find_first_leaf(false).unwrap(), 1);
-  assert_eq!(tree.find_last_leaf(false).unwrap(), 7);
-  
+  // Test resizing
   tree.set_leaf(6, true);
-  assert_eq!(tree.is_full(6).unwrap(), true);
-
+  tree.set_leaf(4, true);
   tree.resize(5);
-  dbg!(&tree.tree);
+  assert_eq!(tree.is_full(4).unwrap(), true);
   tree.resize(8);
-  assert_eq!(tree.is_full(6).unwrap(), false);
-
+  assert_eq!(tree.is_full(6).unwrap(), false); // The 6 was reset as it's out of bounds
+  assert_eq!(tree.is_full(4).unwrap(), true); // The 4 wasn't because it remained in bounds
+  assert_eq!(tree.find_first_leaf(true).unwrap(), 4);
+  assert_eq!(tree.find_last_leaf(true).unwrap(), 4);
 
 }
 
