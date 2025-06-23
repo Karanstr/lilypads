@@ -93,7 +93,6 @@ impl BinaryTree {
 
 }
 
-// Because we have O(1) read times, we can't verify the path is created the easy way
 #[test]
 fn write() {
   let mut tree = BinaryTree::new();
@@ -113,8 +112,9 @@ fn write() {
   assert_eq!(tree.set_leaf(7, false), None);
 }
 
+// We have to verify the paths were built correctly by descending, since normal reads are O(1)
 #[test]
-fn read() {
+fn paths() {
   let mut tree = BinaryTree::new();
   tree.resize(8);
 
