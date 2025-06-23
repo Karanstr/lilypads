@@ -1,8 +1,8 @@
-use vec_mem_heap::NodeField;
+use vec_mem_heap::NodePool;
 
 #[test]
 fn alloc() {
-  let mut storage = NodeField::new();
+  let mut storage = NodePool::new();
   let idx1 = storage.alloc(42);
   let idx2 = storage.alloc(123);
 
@@ -11,30 +11,46 @@ fn alloc() {
 }
 
 #[test]
-fn replace() {
-  let mut storage = NodeField::new();
+fn get() {
+  let mut storage = NodePool::new();
   let idx = storage.alloc(42);
+  // Ensure we can access reserved data and can't access free slots
+  assert_eq!(*storage.get(idx).unwrap(), 42);
+  assert_eq!(storage.get(idx + 1), None);
+}
 
-  // Replace and verify old data is returned
-  let old = storage.replace(idx, 155).unwrap();
-  assert_eq!(old, 42);
-
-  // Verify new data is in place
-  assert_eq!(*storage.get(idx).unwrap(), 155);
+#[test] 
+fn free() {
+  let mut storage = NodePool::new();
+  let idx = storage.alloc(42);
+  // Was data set?
+  assert_eq!(*storage.get(idx).unwrap(), 42);
+  storage.free(idx);
+  // Was data unset?
+  assert_eq!(storage.get(idx), None);
+  // Ensure we can't double free
+  assert_eq!(storage.free(idx), None);
 }
 
 #[test]
-fn errors() {
-  let mut storage = NodeField::new();
-  assert_eq!(storage.get(1), None);
+fn write() {
+  let mut storage = NodePool::new();
   let idx = storage.alloc(42);
-  storage.free(idx);
-  assert_eq!(storage.replace(idx, 12), None);
+
+  let old = storage.write(idx, 155).unwrap();
+  // Verify old data was returned and new data is in place
+  assert_eq!(old, 42);
+  assert_eq!(*storage.get(idx).unwrap(), 155);
+
+  let idx2 = 13;
+  storage.write(idx2, 29);
+  // Ensure the vec was properly resize and the data was marked as reserved
+  assert_eq!(*storage.get(idx2).unwrap(), 29);
 }
 
 #[test]
 fn memory_reuse() {
-  let mut storage = NodeField::new();
+  let mut storage = NodePool::new();
   let idx1 = storage.alloc(1);
   let idx2 = storage.alloc(2);
   storage.free(idx1);
@@ -49,7 +65,7 @@ fn memory_reuse() {
 
 #[test]
 fn defrag() {
-  let mut storage = NodeField::new();
+  let mut storage = NodePool::new();
   let mut indices: Vec<_> = (0..5).map(|i| storage.alloc(i) ).collect();
   // Remove some items to create gaps
   storage.free(indices[1]).unwrap();
@@ -68,7 +84,7 @@ fn defrag() {
 
 #[test]
 fn trim_normal() {
-  let mut storage = NodeField::new();
+  let mut storage = NodePool::new();
   let mut indices: Vec<_> = (0..5).map(|i| storage.alloc(i)).collect();
 
   // Remove last two items
@@ -94,7 +110,7 @@ fn trim_normal() {
 
 #[test]
 fn trim_all_free() {
-  let mut storage = NodeField::new();
+  let mut storage = NodePool::new();
 
   let idx1 = storage.alloc(1);
   let idx2 = storage.alloc(2);
@@ -114,7 +130,7 @@ fn trim_all_free() {
 
 #[test]
 fn trim_empty() {
-  let mut storage = NodeField::<i32>::new();
+  let mut storage = NodePool::<i32>::new();
   _ = storage.trim();
 
   // Verify memory state
@@ -126,7 +142,7 @@ fn trim_empty() {
 
 #[test]
 fn trim_free() {
-  let mut storage = NodeField::<i32>::new();
+  let mut storage = NodePool::<i32>::new();
   storage.resize(16);
   _ = storage.trim();
   
@@ -140,7 +156,7 @@ fn trim_free() {
 #[test]
 fn stress() {
   const N: u32 = 1_000_000;
-  let mut storage = NodeField::new();
+  let mut storage = NodePool::new();
   storage.resize(N as usize);
 
   // Push a bunch of values into the allocator

@@ -1,9 +1,11 @@
-// use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 const NEW_NODE: [[bool; 2]; 2] = [[true, false]; 2];
-#[derive(Clone, Debug,)]// Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BinaryTree {
-  tree: Vec<[[bool; 2]; 2]>, // [[left_has_empty, left_has_full], [right_has_empty, right_has_full]]
+  // tree[idx][left_or_right][empty_or_full]
+  // [[left_has_empty, left_has_full], [right_has_empty, right_has_full]]
+  tree: Vec<[[bool; 2]; 2]>, 
   height: u8,
   size: usize, // Artificial limit for api
 }
@@ -18,8 +20,8 @@ impl BinaryTree {
 
   fn capacity(&self) -> usize { self.tree.len() + 1}
   /// Don't call if size == 0
-  // We want the node halfway through the tree. Divided capacity by 2 for the halfway point.
-  // Subtract 1 is the 0-based index
+  // We want the node halfway through the tree. Divide capacity by 2 for the halfway point.
+  // Subtract 1 is the 0-bases the index
   fn root(&self) -> usize { (self.capacity() >> 1) - 1 }
 
   /// Sets the number of leaves this tree tracks (this was really clever of me)
@@ -36,32 +38,32 @@ impl BinaryTree {
     self.tree.shrink_to_fit();
   }
 
-  // Don't call this function with false, false
+  /// Don't call this function with false, false
   fn find_leaf(&self, first: bool, full: bool) -> Option<usize> {
-    let preffered = !first as usize;
-    let secondary = first as usize;
+    let leaf_type = full as usize;
+    let pref_side = !first as usize;
+    let alt_side = first as usize;
     if self.size == 0 { return None }
     let mut cur_idx = self.root();
     for i in (0 .. self.height).rev() {
       let step = 1 << i;
-      if preffered == 0 {
-        if self.tree[cur_idx][0][full as usize] { cur_idx -= step }
-        else if self.tree[cur_idx][1][full as usize] { cur_idx += step }
+      if pref_side == 0 {
+        if self.tree[cur_idx][0][leaf_type] { cur_idx -= step }
+        else if self.tree[cur_idx][1][leaf_type] { cur_idx += step }
         else { return None }
       } 
       else {
-        if self.tree[cur_idx][1][full as usize] { cur_idx += step }
-        else if self.tree[cur_idx][0][full as usize] { cur_idx -= step }
+        if self.tree[cur_idx][1][leaf_type] { cur_idx += step }
+        else if self.tree[cur_idx][0][leaf_type] { cur_idx -= step }
         else { return None }
       }
     }
-    let result = cur_idx + if self.tree[cur_idx][preffered][full as usize] { preffered }
-    else if self.tree[cur_idx][secondary][full as usize] { secondary }
+    let result = cur_idx + if self.tree[cur_idx][pref_side][leaf_type] { pref_side }
+    else if self.tree[cur_idx][alt_side][leaf_type] { alt_side }
     else { return None };
     (result < self.size).then_some(result)
   }
 
-  pub fn find_first_full(&self) -> Option<usize> { self.find_leaf(true, true)}
   pub fn find_first_free(&self) -> Option<usize> { self.find_leaf(true, false)}
   pub fn find_last_full(&self) -> Option<usize> { self.find_leaf(false, true)}
 
@@ -75,9 +77,9 @@ impl BinaryTree {
         self.tree[cur_idx][0][0] | self.tree[cur_idx][1][0],
         self.tree[cur_idx][0][1] | self.tree[cur_idx][1][1]
       ];
-      let left = idx & (step << 1) == 0;
-      cur_idx = if left { cur_idx + step } else { cur_idx - step };
-      self.tree[cur_idx][!left as usize] = combined;
+      let on_left = idx & (step << 1) == 0;
+      cur_idx = if on_left { cur_idx + step } else { cur_idx - step };
+      self.tree[cur_idx][!on_left as usize] = combined;
       step <<= 1;
     }
     Some(())
@@ -120,7 +122,7 @@ fn paths() {
   tree.set_leaf(6, true);
 
   assert_eq!(tree.find_first_free().unwrap(), 2);
-  assert_eq!(tree.find_first_full().unwrap(), 0);
+  assert_eq!(tree.find_leaf(true, true).unwrap(), 0);
   assert_eq!(tree.find_last_full().unwrap(), 6);
 }
 
@@ -131,14 +133,15 @@ fn resize() {
   
   // Test resizing
   tree.set_leaf(6, true);
-  tree.set_leaf(4, true);
-  tree.resize(5);
-  assert_eq!(tree.is_full(4).unwrap(), true);
+  tree.set_leaf(2, true);
+  // Ensure we also crop the old root head
+  tree.resize(3);
+  assert_eq!(tree.is_full(2).unwrap(), true);
   tree.resize(8);
   assert_eq!(tree.is_full(6).unwrap(), false); // The 6 was reset as it's out of bounds
-  assert_eq!(tree.is_full(4).unwrap(), true); // The 4 wasn't because it remained in bounds
-  assert_eq!(tree.find_leaf(true, true).unwrap(), 4);
-  assert_eq!(tree.find_leaf(false, true).unwrap(), 4);
+  assert_eq!(tree.is_full(2).unwrap(), true); // The 2 wasn't because it remained in bounds
+  assert_eq!(tree.find_leaf(true, true).unwrap(), 2);
+  assert_eq!(tree.find_last_full().unwrap(), 2);
 
 }
 

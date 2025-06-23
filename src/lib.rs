@@ -1,16 +1,16 @@
+#[deny(missing_docs)]
 mod binary_tree;
 use binary_tree::BinaryTree;
-// use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
 
 #[derive(Debug)]
-pub struct NodeField<T> {
+pub struct NodePool<T> {
   data : Vec< MaybeUninit<T> >,
   list: BinaryTree,
 }
 // Private methods
-impl<T> NodeField<T> {
+impl<T> NodePool<T> {
 
   fn is_reserved(&self, idx: usize) -> bool {
     match self.list.is_full(idx) {
@@ -30,10 +30,8 @@ impl<T> NodeField<T> {
     let pot_idx = self.first_free();
     let idx = if pot_idx.is_some() { pot_idx.unwrap() }
     else {
-      let old_len = self.data.len();
-      self.list.resize(old_len + 1);
-      self.data.reserve(1);
-      unsafe { self.data.set_len(old_len + 1) }
+      let old_len = self.len();
+      self.resize(old_len + 1);
       old_len
     };
     self.mark_reserved(idx);
@@ -42,7 +40,7 @@ impl<T> NodeField<T> {
 
 }
 // Public functions
-impl<T> NodeField<T> {
+impl<T> NodePool<T> {
   pub fn new() -> Self {
     Self {
       data : Vec::new(),
@@ -50,10 +48,13 @@ impl<T> NodeField<T> {
     }
   }
 
-  /// Returns the next index which will be allocated on a [NodeField::alloc] call
+  pub fn len(&self) -> usize { self.data.len() }
+
+  /// Returns the next index which will be allocated on a [NodePool::alloc] call. If you need to
+  /// guarantee a certain value, use [NodePool::write] instead.
   pub fn next_allocated(&self) -> usize { self.first_free().unwrap_or(self.data.len()) }
 
-  /// Sets NodeField to hold `size` elements. If size < self.data().len(), excess data will be truncated
+  /// Sets NodePool to hold `size` elements. If size < self.data().len(), excess data will be truncated
   /// and dropped. Use care when calling this function.
   pub fn resize(&mut self, size: usize) {
     let additional = size.saturating_sub(self.data.len());
@@ -80,12 +81,26 @@ impl<T> NodeField<T> {
     Some( unsafe { self.data[idx].assume_init_mut() } )
   }
 
-  /// Stores `data` in the NodeField, returning it's memory index.
+  /// Stores `data` in PoolField, returning it's memory index.
   #[must_use]
   pub fn alloc(&mut self, data:T) -> usize {
     let idx = self.reserve();
     self.data[idx].write(data);
     idx
+  }
+  
+  /// Overwrite and reserve the data at `idx`. 
+  /// Returns Some(old_data) or None, depending whether the slot was previously reserved.
+  ///
+  /// This function will [NodePool::resize] if `idx` is beyond [NodePool::len], guaranteeing
+  /// your data will be written to the requested slot.
+  pub fn write(&mut self, idx:usize, new_data:T) -> Option<T> {
+    if idx >= self.len() { self.resize(idx + 1) }
+    let old_value = if !self.is_reserved(idx) { None } 
+    else { Some( unsafe { self.data[idx].assume_init_read() } ) };
+    self.data[idx].write(new_data);
+    self.mark_reserved(idx);
+    old_value
   }
 
   /// Frees the data at `index`, returning it on success or None on failure.
@@ -94,15 +109,6 @@ impl<T> NodeField<T> {
     if !self.is_reserved(idx) { return None }
     self.mark_free(idx);
     Some( unsafe { self.data[idx].assume_init_read() } )
-  }
-
-  /// Replaces the data at `index` with `new_data`, returning the original data on success or None on failure.
-  /// You may not replace an index which is currently free. 
-  pub fn replace(&mut self, idx:usize, new_data:T) -> Option<T> {
-    if !self.is_reserved(idx) { return None }
-    let old_value = unsafe { self.data[idx].assume_init_read() };
-    self.data[idx].write(new_data);
-    Some(old_value)
   }
 
   /// Travels through memory and re-arranges slots so that they are contiguous in memory, with no free slots in between occupied ones.
@@ -133,12 +139,43 @@ impl<T> NodeField<T> {
     remapped
   }
 
-  /// [NodeField::defrag]s the memory, then shrinks the internal vec to fit remaining data.
+  /// [NodePool::defrag]s the memory, then shrinks the internal vec to fit remaining data.
   #[must_use]
   pub fn trim(&mut self) -> HashMap<usize, usize> {
     let remap = self.defrag();
     if let Some(first_free) = self.first_free() { self.resize(first_free) }
     remap
   }
+
+  /// Returns a safe, readonly version of the allocated memory.
+  pub fn safe_data(&self) -> Vec<Option<&T>> {
+    let mut safe_data = Vec::with_capacity(self.data.len());
+    for idx in 0 .. self.data.len() { safe_data.push( self.get(idx)) }
+    safe_data
+  }
+  
+  /// Returns the unsafe data. This should only be used when you have some sort of
+  /// access scheme (a tree) which can be used to safely navigate the partially-allocated data
+  pub fn unsafe_data(&self) -> &Vec<MaybeUninit<T>> { &self.data }
 }
 
+use serde::{Serialize, Serializer, ser::SerializeSeq, Deserialize, Deserializer};
+impl<T> Serialize for NodePool<T> where T: Serialize {
+  fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    let mut seq = serializer.serialize_seq(Some(self.data.len()))?;
+    for idx in 0 .. self.data.len() { seq.serialize_element(&self.get(idx))?; }
+    seq.end()
+  }
+}
+
+impl<'de, T> Deserialize<'de> for NodePool<T> where T: Deserialize<'de> {
+  fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    let data: Vec<Option<T>> = Vec::deserialize(deserializer)?;
+    let mut pool = Self::new();
+    pool.resize(data.len());
+    for (idx, pot_val) in data.into_iter().enumerate() {
+      if let Some(val) = pot_val { pool.write(idx, val); }
+    }
+    Ok(pool)
+  }
+}
