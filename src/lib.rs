@@ -1,14 +1,14 @@
 #![warn(missing_docs)]
 //! Fun little object pool allocator.
 //!
-//! This is a learning experience for me, but I'm farely confident it doesn't suck that badly.
+//! This is a learning experience for me, but I'm fairly confident it doesn't suck that badly.
 //!
 //! This crate was originally intended for the creation of tree-like datastructures,
 //! where indexes could be used instead of dealing with rust's reference/pointer system.
-//! The vision of the project has somewhat shifted since v0.8 and now is intended as a 
+//! The vision of the project has somewhat shifted since v0.8 and is now intended as a 
 //! general purpose object pool, for whatever you need to be pooling. It attempts to keep data as
-//! contiguous as possible, [Pond::alloc] reserves the first free node and [Pond::defrag] +
-//! [Pond::trim] are provided to maintain contiguity on otherwise sparse data.
+//! contiguous as possible, [Pond::alloc] reserves the first (sequentially) free node and [Pond::defrag] +
+//! [Pond::trim] are provided to maintain contiguity on otherwise sparse allocations.
 //!
 //! This crate isn't yet thread safe, but that's eventually on the todo list probably.
 //!
@@ -55,7 +55,7 @@ use std::mem::MaybeUninit;
 
 /// The struct used to pool T.
 ///
-/// The first avaliable node will be allocated when you call [Pond::alloc],
+/// The first available node will be allocated when you call [Pond::alloc],
 /// intending to keep the data as contiguous as possible. If you need total contiguity,
 /// [Pond::defrag] and [Pond::trim] should help with that.
 #[derive(Debug)]
