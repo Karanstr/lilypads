@@ -66,10 +66,7 @@ pub struct Pond<T> {
 impl<T> Pond<T> {
 
   fn is_reserved(&self, idx: usize) -> bool {
-    match self.list.is_full(idx) {
-      Some(result) => result,
-      None => false
-    }
+    if let Some(result) = self.list.is_full(idx) { result } else { false }
   }
 
   fn first_free(&self) -> Option<usize> { self.list.find_first_free() }
@@ -80,13 +77,10 @@ impl<T> Pond<T> {
 
   #[must_use]
   fn reserve(&mut self) -> usize {
-    let pot_idx = self.first_free();
-    let idx = if pot_idx.is_some() { pot_idx.unwrap() }
-    else {
-      let old_len = self.len();
-      self.resize(old_len + 1);
-      old_len
-    };
+    let idx = self.first_free().unwrap_or_else(|| {
+      self.resize(self.len() + 1);
+      self.len() - 1
+    });
     self.mark_reserved(idx);
     idx
   }
@@ -106,15 +100,13 @@ impl<T> Pond<T> {
 
   /// Returns the next index which will be allocated on a [Pond::alloc] call. If you need to
   /// guarantee a certain value, use [Pond::write] instead.
-  pub fn next_allocated(&self) -> usize { self.first_free().unwrap_or(self.data.len()) }
+  pub fn next_allocated(&self) -> usize { self.first_free().unwrap_or(self.len()) }
 
-  /// Sets Pond to hold `size` elements. If size < self.data().len(), excess data will be truncated and dropped.
+  /// Sets Pond to hold `size` elements. If size < self.len(), excess data will be truncated and dropped.
   pub fn resize(&mut self, size: usize) {
-    let additional = size.saturating_sub(self.data.len());
-    while let Some(idx) = self.list.find_last_full() {
-      if idx < size { break }
-      // Releases the value from the vec, then drops it when we loop and the scope resets.
-      self.free(idx);
+    let additional = size.saturating_sub(self.len());
+    while let Some(idx) = self.list.find_last_full() && idx >= size {
+      self.free(idx); // Releases the value from the vec, then drops it when we loop and the scope resets.
     }
     self.data.reserve(additional);
     unsafe { self.data.set_len(size); }
@@ -149,8 +141,9 @@ impl<T> Pond<T> {
   /// your data will be written to the requested slot.
   pub fn write(&mut self, idx:usize, new_data:T) -> Option<T> {
     if idx >= self.len() { self.resize(idx + 1) }
-    let old_value = if !self.is_reserved(idx) { None } 
-    else { Some( unsafe { self.data[idx].assume_init_read() } ) };
+    let old_value = if self.is_reserved(idx) { 
+      Some( unsafe { self.data[idx].assume_init_read() } ) 
+    } else { None };
     self.data[idx].write(new_data);
     self.mark_reserved(idx);
     old_value
@@ -176,18 +169,12 @@ impl<T> Pond<T> {
   #[must_use]
   pub fn defrag(&mut self) -> HashMap<usize, usize> {
     let mut remapped = HashMap::new();
-    if self.data.len() == 0 { return remapped }
-    'defrag: loop {
-      match (self.list.find_first_free(), self.list.find_last_full()) {
-        (Some(free), Some(full)) => {
-          if free >= full { break 'defrag }
-          remapped.insert(full, free);
-          self.data.swap(free, full);
-          self.list.set_leaf(full, false).unwrap();
-          self.list.set_leaf(free, true).unwrap();
-        }
-        _ => break 'defrag
-      }
+    if self.len() == 0 { return remapped }
+    while let Some(free) = self.list.find_first_free() && let Some(full) = self.list.find_last_full() && free < full {
+      remapped.insert(full, free);
+      self.data.swap(free, full);
+      self.list.set_leaf(full, false).unwrap();
+      self.list.set_leaf(free, true).unwrap();
     }
     remapped
   }
