@@ -1,11 +1,32 @@
+use std::fmt;
 use serde::{Deserialize, Serialize};
 
-const NEW_NODE: [[bool; 2]; 2] = [[true, false]; 2];
+#[derive(Copy, Clone, Serialize, Deserialize)]
+struct PackedNode(u8);
+// xxxx left_has_empty left_has_full right_has_empty right_has_full
+impl PackedNode {
+  const fn empty() -> Self { Self(0b0000_1010) }
+
+  fn read(self, left: bool, full: bool) -> bool {
+    ((self.0 >> 2 * left as u8) >> !full as u8) & 0b1 == 1
+  }
+  // Data should be a u2
+  fn write(&mut self, left: bool, data: u8) {
+    // Mask out existing data
+    self.0 &= !(0b11 << 2 * left as u8);
+    self.0 |= data << 2 * left as u8;
+  }
+  fn combine(self) -> u8 { (self.0 & 0b11) | (self.0 >> 2) }
+}
+impl fmt::Debug for PackedNode {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "{:04b}", self.0)
+  }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BinaryTree {
-  // tree[idx][left_or_right][empty_or_full]
-  // [[left_has_empty, left_has_full], [right_has_empty, right_has_full]]
-  tree: Vec<[[bool; 2]; 2]>, 
+  tree: Vec<PackedNode>,
   height: u8,
   size: usize, // Artificial limit for api
 }
@@ -21,7 +42,7 @@ impl BinaryTree {
   fn capacity(&self) -> usize { self.tree.len() + 1}
   /// Don't call if size == 0
   // We want the node halfway through the tree. Divide capacity by 2 for the halfway point.
-  // Subtract 1 is the 0-bases the index
+  // Subtract 1 is the 0-based index
   fn root(&self) -> usize { (self.capacity() >> 1) - 1 }
 
   /// Sets the number of leaves this tree tracks (this was really clever of me)
@@ -32,34 +53,26 @@ impl BinaryTree {
     let new_capacity = if size == 0 { 0 } else { size.next_power_of_two().max(2) };
     self.height = if new_capacity == 0 { 0 } else { (new_capacity >> 1).ilog2() as u8 };
     self.tree.truncate(size.saturating_sub(1)); // Eliminate any now-invalid data (decreasing only)
-    self.tree.resize(new_capacity.saturating_sub(1), NEW_NODE); // Replace architecture
+    self.tree.resize(new_capacity.saturating_sub(1), PackedNode::empty()); // Replace architecture
     self.size = size;
     if let Some(val) = last_val { self.set_leaf(last_safe_idx, val); } // Rebuild path
     self.tree.shrink_to_fit();
   }
 
   /// Don't call this function with false, false
-  fn find_leaf(&self, first: bool, full: bool) -> Option<usize> {
-    let leaf_type = full as usize;
-    let pref_side = !first as usize;
-    let alt_side = first as usize;
+  /// You'll just get None unless size == capacity
+  fn find_leaf(&self, left: bool, full: bool) -> Option<usize> {
     if self.size == 0 { return None }
     let mut cur_idx = self.root();
     for i in (0 .. self.height).rev() {
       let step = 1 << i;
-      if pref_side == 0 {
-        if self.tree[cur_idx][0][leaf_type] { cur_idx -= step }
-        else if self.tree[cur_idx][1][leaf_type] { cur_idx += step }
-        else { return None }
-      } 
-      else {
-        if self.tree[cur_idx][1][leaf_type] { cur_idx += step }
-        else if self.tree[cur_idx][0][leaf_type] { cur_idx -= step }
-        else { return None }
-      }
+      if self.tree[cur_idx].read(left, full) { cur_idx = if left { cur_idx - step } else {cur_idx + step} }
+      else if self.tree[cur_idx].read(!left, full) { cur_idx = if left { cur_idx + step } else {cur_idx - step} }
+      else { return None }
     }
-    let result = cur_idx + if self.tree[cur_idx][pref_side][leaf_type] { pref_side }
-    else if self.tree[cur_idx][alt_side][leaf_type] { alt_side }
+    let result = cur_idx + 
+      if self.tree[cur_idx].read(left, full) { !left as usize }
+      else if self.tree[cur_idx].read(!left, full) { left as usize }
     else { return None };
     (result < self.size).then_some(result)
   }
@@ -71,15 +84,13 @@ impl BinaryTree {
     if idx >= self.size { return None }
     let mut step = 1;
     let mut cur_idx = idx & !1;
-    self.tree[cur_idx][idx & step] = [!full, full];
+    // We're just packing this silly stuff, we want has_empty to be !full and has_full to be full
+    self.tree[cur_idx].write(idx & step == 0, ((!full as u8) << 1) | full as u8);
     for _ in 0 .. self.height {
-      let combined = [
-        self.tree[cur_idx][0][0] | self.tree[cur_idx][1][0],
-        self.tree[cur_idx][0][1] | self.tree[cur_idx][1][1]
-      ];
+      let combined = self.tree[cur_idx].combine();
       let on_left = idx & (step << 1) == 0;
       cur_idx = if on_left { cur_idx + step } else { cur_idx - step };
-      self.tree[cur_idx][!on_left as usize] = combined;
+      self.tree[cur_idx].write(on_left, combined);
       step <<= 1;
     }
     Some(())
@@ -87,7 +98,7 @@ impl BinaryTree {
 
   pub fn is_full(&self, idx: usize) -> Option<bool> {
     if idx >= self.size { return None }
-    Some(self.tree[idx & !1][idx & 1][1])
+    Some(self.tree[idx & !1].read(idx & 1 == 0, true))
   }
 
 }
@@ -140,6 +151,7 @@ fn resize() {
   tree.resize(8);
   assert_eq!(tree.is_full(6).unwrap(), false); // The 6 was reset as it's out of bounds
   assert_eq!(tree.is_full(2).unwrap(), true); // The 2 wasn't because it remained in bounds
+  dbg!(&tree.tree);
   assert_eq!(tree.find_leaf(true, true).unwrap(), 2);
   assert_eq!(tree.find_last_full().unwrap(), 2);
 

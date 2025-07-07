@@ -164,7 +164,7 @@ fn trim_free() {
 
 #[test]
 fn stress() {
-  const N: u32 = 1_000_000;
+  const N: u32 = 1_000_000_0;
   let mut pool = Pond::new();
   pool.resize(N as usize);
 
