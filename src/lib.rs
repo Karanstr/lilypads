@@ -49,7 +49,9 @@
 //! ```
 
 mod binary_tree;
-use binary_tree::BinaryTree;
+mod bitmap;
+use bitmap::Bitmap;
+// use binary_tree::BinaryTree;
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
 
@@ -61,7 +63,7 @@ use std::mem::MaybeUninit;
 #[derive(Debug)]
 pub struct Pond<T> {
   data : Vec< MaybeUninit<T> >,
-  list: BinaryTree,
+  list: Bitmap,
 }
 impl<T> Pond<T> {
 
@@ -71,9 +73,9 @@ impl<T> Pond<T> {
 
   fn first_free(&self) -> Option<usize> { self.list.find_first_free() }
 
-  fn mark_free(&mut self, idx:usize) { self.list.set_leaf(idx, false).unwrap(); }
+  fn mark_free(&mut self, idx:usize) { self.list.set(idx, false).unwrap(); }
 
-  fn mark_reserved(&mut self, idx:usize) { self.list.set_leaf(idx, true).unwrap(); }
+  fn mark_reserved(&mut self, idx:usize) { self.list.set(idx, true).unwrap(); }
 
   #[must_use]
   fn reserve(&mut self) -> usize {
@@ -91,7 +93,7 @@ impl<T> Pond<T> {
   pub fn new() -> Self {
     Self {
       data : Vec::new(),
-      list: BinaryTree::new(),
+      list: Bitmap::new(),
     }
   }
 
@@ -105,12 +107,11 @@ impl<T> Pond<T> {
   /// Sets Pond to hold `size` elements. If size < self.len(), excess data will be truncated and dropped.
   pub fn resize(&mut self, size: usize) {
     let additional = size.saturating_sub(self.len());
-    while let Some(idx) = self.list.find_last_full() && idx >= size {
-      self.free(idx); // Releases the value from the vec, then drops it when we loop and the scope resets.
+    for idx in (size .. self.len()).rev() {
+      if self.list.is_full(idx).unwrap() { self.free(idx); }
     }
     self.data.reserve(additional);
     unsafe { self.data.set_len(size); }
-
     self.list.resize(size);
   }
 
@@ -162,19 +163,23 @@ impl<T> Pond<T> {
   /// 
   /// Slots at the back of memory will be placed in the first free slot, until the above condition is met.
   /// 
-  /// This operation is O(KlogN), where K is the number of swaps required to make data contiguous
-  /// and logN is the height of the internal freetree. Barring degenerate cases where most of your
-  /// free nodes are clumped at the front and most of your data is in the back, this should probably be faster than the O(N) alternative. 
-  /// If you feel differently, make an issue and I'll revive the original linear search function as an alternative
+  // Note to self, figure out time complexity
   #[must_use]
   pub fn defrag(&mut self) -> HashMap<usize, usize> {
     let mut remapped = HashMap::new();
     if self.len() == 0 { return remapped }
-    while let Some(free) = self.list.find_first_free() && let Some(full) = self.list.find_last_full() && free < full {
+    let mut full = self.len();
+    let mut last_full = full;
+    while let Some(free) = self.list.find_first_free() {
+      for idx in (free .. last_full).rev() {
+        if self.list.is_full(idx).unwrap() { full = idx; break }
+      }
+      if full == last_full { break }
       remapped.insert(full, free);
       self.data.swap(free, full);
-      self.list.set_leaf(full, false).unwrap();
-      self.list.set_leaf(free, true).unwrap();
+      self.list.set(full, false).unwrap();
+      self.list.set(free, true).unwrap();
+      last_full = full;
     }
     remapped
   }
