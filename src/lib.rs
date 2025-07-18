@@ -48,10 +48,8 @@
 //! }
 //! ```
 
-mod binary_tree;
 mod bitmap;
 use bitmap::Bitmap;
-// use binary_tree::BinaryTree;
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
 
