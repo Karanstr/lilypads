@@ -19,7 +19,7 @@ impl Bitmap {
       size += 63;
       size >>= 6;
       self.layers[i].resize(size, 0);
-      if self.layers[i].len() == 0 || last_bit != 0 { continue }
+      if self.layers[i].len() == 0 || last_bit == 0 { continue }
       let last_bocks = self.layers[i].len() - 1;
       self.layers[i][last_bocks] &= (1 << last_bit) - 1;
     }
