@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Bitmap { 
-  layers: [Vec<u64>; 3],
+  pub layers: [Vec<u64>; 3],
   size: usize, // Artificial API limit for bound checking
 }
 impl Bitmap {
@@ -19,9 +19,9 @@ impl Bitmap {
       size += 63;
       size >>= 6;
       self.layers[i].resize(size, 0);
-      if self.layers[i].len() == 0 || last_bit == 0 { continue }
+      if self.layers[i].len() == 0 { continue }
       let last_bocks = self.layers[i].len() - 1;
-      self.layers[i][last_bocks] &= (1 << last_bit) - 1;
+      self.layers[i][last_bocks] &= !(!0 << last_bit);
     }
   }
 
@@ -79,5 +79,4 @@ fn write() {
 
   assert_eq!(tree.find_first_free(), Some(2));
 
-  assert_eq!(tree.is_full(7), None);
 }

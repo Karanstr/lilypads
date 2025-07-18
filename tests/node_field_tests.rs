@@ -172,3 +172,7 @@ fn stress() {
   for i in 0..N { let _ = pool.alloc(i); }
 }
 
+#[test]
+fn something_broken() {
+
+}

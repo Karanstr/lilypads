@@ -190,13 +190,16 @@ impl<T> Pond<T> {
     remap
   }
 
+  /// Temporarily exposes the list for debugging
+  pub fn list(&self) -> &Bitmap { &self.list }
+
   /// Returns a safe, readonly version of the allocated memory.
   pub fn safe_data(&self) -> Vec<Option<&T>> {
     let mut safe_data = Vec::with_capacity(self.data.len());
     for idx in 0 .. self.data.len() { safe_data.push( self.get(idx)) }
     safe_data
   }
-  
+
   /// Returns the unsafe data. This should only be used when you have some sort of
   /// access scheme (a tree) which can be used to safely navigate the partially-allocated data
   pub fn unsafe_data(&self) -> &Vec<MaybeUninit<T>> { &self.data }
