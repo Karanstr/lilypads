@@ -1,6 +1,6 @@
 [package]
 name = "lilypads"
-version = "0.10.2"
+version = "0.10.3"
 edition = "2024"
 description = "Fun little object pool allocator."
 repository = "https://github.com/Karanstr/lilypads"
