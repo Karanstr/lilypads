@@ -105,9 +105,9 @@ impl<T> Pond<T> {
   /// Sets Pond to hold `size` elements. If size < self.len(), excess data will be truncated and dropped.
   pub fn resize(&mut self, size: usize) {
     let additional = size.saturating_sub(self.len());
-    for idx in (size .. self.len()).rev() {
-      if self.list.is_full(idx).unwrap() { self.free(idx); }
-    }
+    // for idx in (size .. self.len()).rev() {
+    //   if self.list.is_full(idx).unwrap() { self.free(idx); }
+    // }
     self.data.reserve(additional);
     unsafe { self.data.set_len(size); }
     self.list.resize(size);

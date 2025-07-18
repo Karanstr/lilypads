@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 pub struct Bitmap { 
   layers: [Vec<u64>; 3],
   size: usize, // Artificial API limit for bound checking
-
 }
 impl Bitmap {
 
@@ -14,16 +13,16 @@ impl Bitmap {
   } }
 
   pub fn resize(&mut self, mut size: usize) {
-    self.size = size;
     for i in 0 .. 3 {
       let last_bit = size & 63;
       size += 63;
       size >>= 6;
       self.layers[i].resize(size, 0);
       if self.layers[i].len() == 0 { continue }
-      let last_bocks = self.layers[i].len().saturating_sub(1);
+      let last_bocks = self.layers[i].len() - 1;
       self.layers[i][last_bocks] &= (1 << last_bit) - 1;
     }
+    self.size = size;
   }
 
   pub fn find_first_free(&self) -> Option<usize> {
@@ -73,10 +72,10 @@ fn write() {
   assert_eq!(tree.is_full(1).unwrap(), true);
 
   // Make sure setting and unsetting work
-  tree.set(3, true);
-  assert_eq!(tree.is_full(3).unwrap(), true);
-  tree.set(3, false);
-  assert_eq!(tree.is_full(3).unwrap(), false);
+  tree.set(2, true);
+  assert_eq!(tree.is_full(2).unwrap(), true);
+  tree.set(2, false);
+  assert_eq!(tree.is_full(2).unwrap(), false);
 
   assert_eq!(tree.find_first_free(), Some(2));
 
