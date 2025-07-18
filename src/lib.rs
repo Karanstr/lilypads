@@ -66,21 +66,19 @@ pub struct Pond<T> {
 impl<T> Pond<T> {
 
   fn is_reserved(&self, idx: usize) -> bool {
-    if let Some(result) = self.list.is_full(idx) { result } else { false }
+    if idx < self.data.len() { self.list.is_full(idx) } else { false }
   }
 
-  fn first_free(&self) -> Option<usize> { self.list.find_first_free() }
+  /// THIS FUNCTION DOESN'T BOUND CHECK
+  fn mark_free(&mut self, idx:usize) { self.list.set(idx, false) }
 
-  fn mark_free(&mut self, idx:usize) { self.list.set(idx, false).unwrap(); }
-
-  fn mark_reserved(&mut self, idx:usize) { self.list.set(idx, true).unwrap(); }
+  /// THIS FUNCTION DOESN'T BOUND CHECK
+  fn mark_reserved(&mut self, idx:usize) { self.list.set(idx, true); }
 
   #[must_use]
   fn reserve(&mut self) -> usize {
-    let idx = self.first_free().unwrap_or_else(|| {
-      self.resize(self.len() + 1);
-      self.len() - 1
-    });
+    let idx = self.list.first_free().unwrap_or(self.len());
+    if idx >= self.len() { self.resize(idx + 1) }
     self.mark_reserved(idx);
     idx
   }
@@ -100,15 +98,14 @@ impl<T> Pond<T> {
 
   /// Returns the next index which will be allocated on a [Pond::alloc] call. If you need to
   /// guarantee a certain value, use [Pond::write] instead.
-  pub fn next_allocated(&self) -> usize { self.first_free().unwrap_or(self.len()) }
+  pub fn next_allocated(&self) -> usize { self.list.first_free().unwrap_or(self.len()) }
 
   /// Sets Pond to hold `size` elements. If size < self.len(), excess data will be truncated and dropped.
   pub fn resize(&mut self, size: usize) {
-    let additional = size.saturating_sub(self.len());
-    for idx in (size .. self.len()).rev() {
-      if self.list.is_full(idx).unwrap() { unsafe { self.data[idx].assume_init_drop(); } }
+    for idx in size .. self.len() {
+      if self.list.is_full(idx) { unsafe { self.data[idx].assume_init_drop(); } }
     }
-    self.data.reserve(additional);
+    self.data.reserve(size.saturating_sub(self.len()));
     unsafe { self.data.set_len(size); }
     self.list.resize(size);
   }
@@ -168,15 +165,15 @@ impl<T> Pond<T> {
     if self.len() == 0 { return remapped }
     let mut full = self.len();
     let mut last_full = full;
-    while let Some(free) = self.list.find_first_free() {
+    while let Some(free) = self.list.first_free() {
       for idx in (free .. last_full).rev() {
-        if self.list.is_full(idx).unwrap() { full = idx; break }
+        if self.list.is_full(idx) { full = idx; break }
       }
       if full == last_full { break }
       remapped.insert(full, free);
       self.data.swap(free, full);
-      self.list.set(full, false).unwrap();
-      self.list.set(free, true).unwrap();
+      self.list.set(full, false);
+      self.list.set(free, true);
       last_full = full;
     }
     remapped
@@ -186,7 +183,7 @@ impl<T> Pond<T> {
   #[must_use]
   pub fn trim(&mut self) -> HashMap<usize, usize> {
     let remap = self.defrag();
-    if let Some(first_free) = self.first_free() { self.resize(first_free) }
+    if let Some(first_free) = self.list.first_free() { self.resize(first_free) }
     remap
   }
 
