@@ -190,9 +190,6 @@ impl<T> Pond<T> {
     remap
   }
 
-  /// Temporarily exposes the list for debugging
-  pub fn list(&self) -> &Bitmap { &self.list }
-
   /// Returns a safe, readonly version of the allocated memory.
   pub fn safe_data(&self) -> Vec<Option<&T>> {
     let mut safe_data = Vec::with_capacity(self.data.len());

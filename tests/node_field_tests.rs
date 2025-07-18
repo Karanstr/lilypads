@@ -174,5 +174,10 @@ fn stress() {
 
 #[test]
 fn something_broken() {
+  let mut pool = Pond::new();
+  pool.resize(63);
+  pool.write(62, 5);
+  pool.resize(64);
+  assert_eq!(*pool.get(62).unwrap(), 5);
 
 }
