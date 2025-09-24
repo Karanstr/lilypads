@@ -110,13 +110,13 @@ impl<T> Pond<T> {
     self.list.resize(size);
   }
 
-  /// Returns an immutable reference to the data stored at the requested index, or an [AccessError] if there is a problem.
+  /// Returns an immutable reference to the data stored at the requested index, or None if the index isn't reserved
   pub fn get(&self, idx:usize) -> Option<&T> {
     if !self.is_reserved(idx) { return None }
     Some( unsafe { self.data[idx].assume_init_ref() } )
   }
 
-  /// Returns a mutable reference to the data stored at the requested index, or an [AccessError] if there is a problem.
+  /// Returns a mutable reference to the data stored at the requested index, or None if the index isn't reserved
   pub fn get_mut(&mut self, idx:usize) -> Option<&mut T> {
     if !self.is_reserved(idx) { return None }
     Some( unsafe { self.data[idx].assume_init_mut() } )
