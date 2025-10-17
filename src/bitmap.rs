@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+// & 63 Extracts the per bit u64 from the index, effectively our bottom level
+// >>= 6 Removes the per bit u64 from the index, so we can properly index the vecs
+
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Bitmap { layers: [Vec<u64>; 3] }
 impl Bitmap {
@@ -7,12 +10,11 @@ impl Bitmap {
   pub fn new() -> Self { Self { layers: [Vec::new(), Vec::new(), Vec::new()], } }
 
   pub fn resize(&mut self, mut size: usize) {
-    for i in 0 .. 3 {
+    for layer in self.layers.iter_mut() {
       let last_bit = size & 63;
       size >>= 6;
-      self.layers[i].resize(size + 1, 0);
-      let last_bocks = self.layers[i].len() - 1;
-      self.layers[i][last_bocks] &= !(!0 << last_bit);
+      layer.resize(size + 1, 0);
+      layer[size] &= !(!0 << last_bit);
     }
   }
 
@@ -68,5 +70,5 @@ fn write() {
   assert_eq!(tree.is_full(2), false);
 
   assert_eq!(tree.first_free(), Some(2));
-
 }
+
