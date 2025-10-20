@@ -65,10 +65,6 @@ pub struct Pond<T> {
 }
 impl<T> Pond<T> {
 
-  // fn is_occupied(&self, idx: usize) -> bool {
-  //   if idx < self.data.len() { self.list.is_full(idx) } else { false }
-  // }
-
   /// THIS FUNCTION DOESN'T BOUND CHECK
   fn mark_free(&mut self, idx:usize) { self.list.set(idx, false) }
 
