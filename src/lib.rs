@@ -7,7 +7,7 @@
 //! where indexes could be used instead of dealing with rust's reference/pointer system.
 //! The vision of the project has somewhat shifted since v0.8 and is now intended as a 
 //! general purpose object pool, for whatever you need to be pooling. It attempts to keep data as
-//! contiguous as possible, [Pond::alloc] reserves the first (sequentially) free node and [Pond::defrag] +
+//! contiguous as possible, [Pond::insert] reserves the first (sequentially) free node and [Pond::defrag] +
 //! [Pond::trim] are provided to maintain contiguity on otherwise sparse allocations.
 //!
 //! This crate isn't yet thread safe, but that's eventually on the todo list probably.
@@ -19,8 +19,8 @@
 //! fn main() {
 //!   let mut pool = Pond::new();
 //!   // You can push data into the pond and recieve their index.
-//!   let idx1 = pool.alloc(57);
-//!   let idx2 = pool.alloc(42);
+//!   let idx1 = pool.insert(57);
+//!   let idx2 = pool.insert(42);
 //!
 //!   // Data is retrieved with get
 //!   let data1 = pool.get(idx1).unwrap();
@@ -55,7 +55,7 @@ use std::mem::MaybeUninit;
 
 /// The struct used to pool T.
 ///
-/// The first available node will be allocated when you call [Pond::alloc],
+/// The first available node will be assigned when you call [Pond::insert],
 /// intending to keep the data as contiguous as possible. If you need total contiguity,
 /// [Pond::defrag] and [Pond::trim] should help with that.
 #[derive(Debug)]
@@ -65,9 +65,9 @@ pub struct Pond<T> {
 }
 impl<T> Pond<T> {
 
-  fn is_reserved(&self, idx: usize) -> bool {
-    if idx < self.data.len() { self.list.is_full(idx) } else { false }
-  }
+  // fn is_occupied(&self, idx: usize) -> bool {
+  //   if idx < self.data.len() { self.list.is_full(idx) } else { false }
+  // }
 
   /// THIS FUNCTION DOESN'T BOUND CHECK
   fn mark_free(&mut self, idx:usize) { self.list.set(idx, false) }
@@ -92,13 +92,18 @@ impl<T> Pond<T> {
       list: Bitmap::new(),
     }
   }
+  
+  /// Checks whether the provided index has an associated value
+  pub fn is_occupied(&self, idx: usize) -> bool {
+    if idx < self.data.len() { self.list.is_full(idx) } else { false }
+  }
 
   /// Returns the number of slots held internally, both free and full.
   pub fn len(&self) -> usize { self.data.len() }
 
-  /// Returns the next index which will be allocated on a [Pond::alloc] call. If you need to
-  /// guarantee a certain value, use [Pond::write] instead.
-  pub fn next_allocated(&self) -> usize { self.list.first_free().unwrap_or(self.len()) }
+  /// Returns the next index which will be assigned on a [Pond::insert] call. If you need to
+  /// guarantee a specific index, use [Pond::write] instead.
+  pub fn next_index(&self) -> usize { self.list.first_free().unwrap_or(self.len()) }
 
   /// Sets Pond to hold `size` elements. If size < self.len(), excess data will be truncated and dropped.
   pub fn resize(&mut self, size: usize) {
@@ -112,19 +117,19 @@ impl<T> Pond<T> {
 
   /// Returns an immutable reference to the data stored at the requested index, or None if the index isn't reserved
   pub fn get(&self, idx:usize) -> Option<&T> {
-    if !self.is_reserved(idx) { return None }
+    if !self.is_occupied(idx) { return None }
     Some( unsafe { self.data[idx].assume_init_ref() } )
   }
 
   /// Returns a mutable reference to the data stored at the requested index, or None if the index isn't reserved
   pub fn get_mut(&mut self, idx:usize) -> Option<&mut T> {
-    if !self.is_reserved(idx) { return None }
+    if !self.is_occupied(idx) { return None }
     Some( unsafe { self.data[idx].assume_init_mut() } )
   }
 
-  /// Stores `data` in PoolField, returning it's memory index.
+  /// Stores `data` in PoolField, returning a reference index.
   #[must_use]
-  pub fn alloc(&mut self, data:T) -> usize {
+  pub fn insert(&mut self, data:T) -> usize {
     let idx = self.reserve();
     self.data[idx].write(data);
     idx
@@ -137,7 +142,7 @@ impl<T> Pond<T> {
   /// your data will be written to the requested slot.
   pub fn write(&mut self, idx:usize, new_data:T) -> Option<T> {
     if idx >= self.len() { self.resize(idx + 1) }
-    let old_value = if self.is_reserved(idx) { 
+    let old_value = if self.is_occupied(idx) { 
       Some( unsafe { self.data[idx].assume_init_read() } ) 
     } else { None };
     self.data[idx].write(new_data);
@@ -148,7 +153,7 @@ impl<T> Pond<T> {
   /// Frees the data at `index`, returning it on success or None on failure.
   /// Failure means you were trying to free a node which was already free.
   pub fn free(&mut self, idx:usize) -> Option<T> {
-    if !self.is_reserved(idx) { return None }
+    if !self.is_occupied(idx) { return None }
     self.mark_free(idx);
     Some( unsafe { self.data[idx].assume_init_read() } )
   }
@@ -187,15 +192,16 @@ impl<T> Pond<T> {
     remap
   }
 
-  /// Returns a safe, readonly version of the allocated memory.
+  /// Returns a safe, readonly version of the internal vec.
   pub fn safe_data(&self) -> Vec<Option<&T>> {
     let mut safe_data = Vec::with_capacity(self.data.len());
     for idx in 0 .. self.data.len() { safe_data.push( self.get(idx)) }
     safe_data
   }
 
-  /// Returns the unsafe data. This should only be used when you have some sort of
-  /// access scheme (a tree) which can be used to safely navigate the partially-allocated data
+  /// Returns the readonly, unsafe reference to the internal vec. 
+  /// This should only be used when you have some sort of
+  /// access scheme (such as a tree) which can be used to safely navigate the unsafe data
   pub fn unsafe_data(&self) -> &Vec<MaybeUninit<T>> { &self.data }
 }
 

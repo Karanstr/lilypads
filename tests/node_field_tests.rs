@@ -1,10 +1,10 @@
 use lilypads::Pond;
 
 #[test]
-fn alloc() {
+fn insert() {
   let mut pool = Pond::new();
-  let idx1 = pool.alloc(42);
-  let idx2 = pool.alloc(123);
+  let idx1 = pool.insert(42);
+  let idx2 = pool.insert(123);
 
   assert_eq!(*pool.get(idx1).unwrap(), 42);
   assert_eq!(*pool.get(idx2).unwrap(), 123);
@@ -13,7 +13,7 @@ fn alloc() {
 #[test]
 fn get() {
   let mut pool = Pond::new();
-  let idx = pool.alloc(42);
+  let idx = pool.insert(42);
   // Ensure we can access reserved data and can't access free slots
   assert_eq!(*pool.get(idx).unwrap(), 42);
   assert_eq!(pool.get(idx + 1), None);
@@ -22,7 +22,7 @@ fn get() {
 #[test]
 fn mut_get() {
   let mut pool = Pond::new();
-  let idx = pool.alloc(42);
+  let idx = pool.insert(42);
   let data2 = pool.get_mut(idx).unwrap();
   *data2 = 13;
   assert_eq!(*pool.get(idx).unwrap(), 13);
@@ -31,7 +31,7 @@ fn mut_get() {
 #[test] 
 fn free() {
   let mut pool = Pond::new();
-  let idx = pool.alloc(42);
+  let idx = pool.insert(42);
   // Was data set?
   assert_eq!(*pool.get(idx).unwrap(), 42);
   pool.free(idx);
@@ -44,7 +44,7 @@ fn free() {
 #[test]
 fn write() {
   let mut pool = Pond::new();
-  let idx = pool.alloc(42);
+  let idx = pool.insert(42);
 
   let old = pool.write(idx, 155).unwrap();
   // Verify old data was returned and new data is in place
@@ -60,10 +60,10 @@ fn write() {
 #[test]
 fn memory_reuse() {
   let mut pool = Pond::new();
-  let idx1 = pool.alloc(1);
-  let idx2 = pool.alloc(2);
+  let idx1 = pool.insert(1);
+  let idx2 = pool.insert(2);
   pool.free(idx1);
-  let idx3 = pool.alloc(3);
+  let idx3 = pool.insert(3);
 
   // Verify reuse
   assert_eq!(idx1, idx3);
@@ -75,7 +75,7 @@ fn memory_reuse() {
 #[test]
 fn defrag() {
   let mut pool = Pond::new();
-  let mut indices: Vec<_> = (0..5).map(|i| pool.alloc(i) ).collect();
+  let mut indices: Vec<_> = (0..5).map(|i| pool.insert(i) ).collect();
   // Remove some items to create gaps
   pool.free(indices[1]).unwrap();
   pool.free(indices[3]).unwrap();
@@ -88,13 +88,13 @@ fn defrag() {
   assert_eq!(*pool.get(indices[0]).unwrap(), 0);
   assert_eq!(*pool.get(indices[2]).unwrap(), 2);
   assert_eq!(*pool.get(indices[4]).unwrap(), 4);
-  assert_eq!(pool.next_allocated(), 3);
+  assert_eq!(pool.next_index(), 3);
 }
 
 #[test]
 fn trim_normal() {
   let mut pool = Pond::new();
-  let mut indices: Vec<_> = (0..5).map(|i| pool.alloc(i)).collect();
+  let mut indices: Vec<_> = (0..5).map(|i| pool.insert(i)).collect();
 
   // Remove last two items
   pool.free(indices[3]).unwrap();
@@ -108,8 +108,8 @@ fn trim_normal() {
   assert!(matches!(pool.get(2), Some(_)));
   assert!(matches!(pool.get(3), None));
 
-  // Verify allocator state after trim
-  assert_eq!(pool.next_allocated(), 3);
+  // Verify insertator state after trim
+  assert_eq!(pool.next_index(), 3);
 
   // Verify remaining data
   assert_eq!(*pool.get(indices[0]).unwrap(), 0);
@@ -121,8 +121,8 @@ fn trim_normal() {
 fn trim_all_free() {
   let mut pool = Pond::new();
 
-  let idx1 = pool.alloc(1);
-  let idx2 = pool.alloc(2);
+  let idx1 = pool.insert(1);
+  let idx2 = pool.insert(2);
 
   //Set all slots to free
   pool.free(idx1).unwrap();
@@ -133,8 +133,8 @@ fn trim_all_free() {
   // Verify memory state
   assert_eq!(pool.get(0), None);
 
-  // Verify allocator state after trim
-  assert_eq!(pool.next_allocated(), 0);
+  // Verify insertator state after trim
+  assert_eq!(pool.next_index(), 0);
 }
 
 #[test]
@@ -145,8 +145,8 @@ fn trim_empty() {
   // Verify memory state
   assert_eq!(pool.get(0), None);
 
-  // Verify allocator state after trim
-  assert_eq!(pool.next_allocated(), 0);
+  // Verify insertator state after trim
+  assert_eq!(pool.next_index(), 0);
 }
 
 #[test]
@@ -158,8 +158,8 @@ fn trim_free() {
   // Verify memory state
   assert_eq!(pool.get(0), None);
 
-  // Verify allocator state after trim
-  assert_eq!(pool.next_allocated(), 0);
+  // Verify insertator state after trim
+  assert_eq!(pool.next_index(), 0);
 }
 
 #[test]
@@ -168,8 +168,8 @@ fn stress() {
   let mut pool = Pond::new();
   pool.resize(N as usize);
 
-  // Push a bunch of values into the allocator
-  for i in 0..N { let _ = pool.alloc(i); }
+  // Push a bunch of values into the insertator
+  for i in 0..N { let _ = pool.insert(i); }
 }
 
 #[test]
