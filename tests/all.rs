@@ -181,3 +181,4 @@ fn bitmap_resize_boundary() {
   assert_eq!(*pool.get(62).unwrap(), 5);
 }
 
+
