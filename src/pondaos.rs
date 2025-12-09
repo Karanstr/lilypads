@@ -1,5 +1,6 @@
 #![warn(missing_docs)]
 use crate::bitmap::AcceleratedBitmap;
+use core::slice;
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
 
@@ -151,6 +152,36 @@ impl<T> Pond<T> {
   pub fn unsafe_data(&self) -> &Vec<MaybeUninit<T>> { &self.data }
 }
 
+// Iterators
+impl<T> Pond<T> {
+
+  /// Returns an iterator over all valid items stored in this pond, in order.
+  ///
+  /// This iterator covers (item_idx, &T)
+  pub fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
+    let bitmap = &self.bitmap;
+    self.data.iter().enumerate().filter_map(|(idx, data)| {
+      // This is a safe call because we're iterating over avaliable slots already
+      if bitmap.is_set(idx) {
+        Some( (idx, unsafe { data.assume_init_ref() }) )
+      } else { None }
+    })
+  }
+
+  /// Returns an iterator over all valid items stored in this pond, in order.
+  ///
+  /// This iterator covers (item_idx, &mut T)
+  pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
+    let bitmap = &self.bitmap;
+    self.data.iter_mut().enumerate().filter_map(|(idx, data)| {
+      // This is a safe call because we're iterating over avaliable slots already
+      if bitmap.is_set(idx) {
+        Some( (idx, unsafe { data.assume_init_mut() }) )
+      } else { None }
+    } ) 
+  }
+
+}
 
 use serde::{Serialize, Serializer, ser::SerializeSeq, Deserialize, Deserializer};
 impl<T> Serialize for Pond<T> where T: Serialize {
