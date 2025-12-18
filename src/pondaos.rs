@@ -1,6 +1,5 @@
 #![warn(missing_docs)]
 use crate::bitmap::AcceleratedBitmap;
-use core::slice;
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
 
