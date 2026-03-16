@@ -34,7 +34,7 @@ impl AcceleratedBitmap {
 
   pub fn resize(&mut self, size: usize) {
     let offset = size & BASE_MASK;
-    let mut full_word_count= size >> BASE_SHIFT;
+    let mut full_word_count = size >> BASE_SHIFT;
     self.base.resize(full_word_count + 1, 0);
     // This line zeros any leftovers after the requested size
     // It generates a bitstring of 1s via not
@@ -42,9 +42,9 @@ impl AcceleratedBitmap {
     // Inverts the string via not
     self.base[full_word_count] &= !(!0 << offset);
     for layer in &mut self.accel_layers {
-        full_word_count >>= ACCEL_SHIFT;                       // shift first
-        let offset = full_word_count & ACCEL_MASK;      // then derive offset from scaled value
-        layer.resize(full_word_count + 1, 0);  // resize to correct scaled length
+        let offset = full_word_count & ACCEL_MASK;
+        full_word_count >>= ACCEL_SHIFT;
+        layer.resize(full_word_count + 1, 0);
         let set_mask = SET_FULL >> (32 - offset);
         let unset_mask = UNSET_FULL >> (32 - offset) & UNSET_FULL;
         layer[full_word_count] &= unset_mask | set_mask;
