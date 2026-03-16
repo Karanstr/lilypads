@@ -42,13 +42,12 @@ impl AcceleratedBitmap {
     // Inverts the string via not
     self.base[full_word_count] &= !(!0 << offset);
     for layer in &mut self.accel_layers {
-      let offset = size & ACCEL_MASK;
-      full_word_count >>= ACCEL_SHIFT;
-      layer.resize(size + 1, 0);
-      // See above, except now we need to do this for first 32 bits and second 32 bits individually
-      let set_mask = SET_FULL >> (32 - offset);
-      let unset_mask = UNSET_FULL >> (32 - offset) & UNSET_FULL;
-      layer[full_word_count] &= unset_mask | set_mask;
+        full_word_count >>= ACCEL_SHIFT;                       // shift first
+        let offset = full_word_count & ACCEL_MASK;      // then derive offset from scaled value
+        layer.resize(full_word_count + 1, 0);  // resize to correct scaled length
+        let set_mask = SET_FULL >> (32 - offset);
+        let unset_mask = UNSET_FULL >> (32 - offset) & UNSET_FULL;
+        layer[full_word_count] &= unset_mask | set_mask;
     }
   }
 
@@ -57,8 +56,8 @@ impl AcceleratedBitmap {
       let mut result = None;
       for (val, boks) in self.accel_layers.last().unwrap().iter().enumerate() {
         if *boks != SET_FULL {
-          result = Some((val << ACCEL_SHIFT) + boks.trailing_ones() as usize);
-          break;
+            result = Some((val << ACCEL_SHIFT) + (*boks as u32).trailing_ones() as usize);
+            break;
         }
       }
       result?
