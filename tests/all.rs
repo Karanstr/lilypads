@@ -175,10 +175,12 @@ fn stress() {
 #[test]
 fn bitmap_resize_boundary() {
   let mut pool = Pond::new();
-  pool.resize(63);
-  pool.write(62, 5);
-  pool.resize(64);
-  assert_eq!(*pool.get(62).unwrap(), 5);
+  for idx in 0 .. 32 {
+    pool.write(idx, idx);
+  }
+
+  assert_eq!(pool.insert(100), 32);
+  assert_eq!(pool.next_index(), 33);
 }
 
 

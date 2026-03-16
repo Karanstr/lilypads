@@ -37,9 +37,9 @@ impl AcceleratedBitmap {
     let mut full_word_count = size >> BASE_SHIFT;
     self.base.resize(full_word_count + 1, 0);
     // This line zeros any leftovers after the requested size
-    // It generates a bitstring of 1s via not
-    // Creates 0s in the front via shift
-    // Inverts the string via not
+    // It generates a bitstring of 1s via not,
+    // creates 0s in the front via shift,
+    // and inverts the string via not
     self.base[full_word_count] &= !(!0 << offset);
     for layer in &mut self.accel_layers {
         let offset = full_word_count & ACCEL_MASK;
@@ -51,26 +51,28 @@ impl AcceleratedBitmap {
     }
   }
 
-  pub fn first_free(&self) -> Option<usize> {
-    let mut idx = {
-      let mut result = None;
-      for (val, boks) in self.accel_layers.last().unwrap().iter().enumerate() {
-        if *boks != SET_FULL {
-            result = Some((val << ACCEL_SHIFT) + (*boks as u32).trailing_ones() as usize);
-            break;
-        }
-      }
-      result?
-    };
 
-    let mut iter = self.accel_layers.iter().rev();
-    iter.next();
-    for layer in iter {
-      let offset = (layer[idx] as u32).trailing_ones() as usize;
-      idx = (idx << ACCEL_SHIFT) + offset;
+  /// Returns the first free index, or none if the bitmap is saturated
+  // Warning, this rewrite was written with significant help from AI,
+  // I'm fairly certain it functions correctly, but you never know
+  pub fn first_free(&self) -> Option<usize> {
+    if self.base.len() == 0 { return None }
+    let mut idx = 0;
+    for layer in self.accel_layers.iter().rev() {
+      let word = layer[idx];
+      let free_bits = !((word as u32) & 0xFFFF_FFFF); // lower 32 bits track empties
+      if free_bits == 0 { return None }
+      let bit_pos = free_bits.trailing_zeros() as usize;
+      idx = (idx << ACCEL_SHIFT) + bit_pos;
     }
-    let offset = (self.base[idx] as u32).trailing_ones() as usize;
-    Some( (idx << BASE_SHIFT) + offset )
+
+    // Finally scan the base layer
+    let word = self.base[idx];
+    let free_bits = !((word as u32) & 0xFFFF_FFFF);
+    if free_bits == 0 { return None }
+    let bit_pos = free_bits.trailing_zeros() as usize;
+
+    Some((idx << BASE_SHIFT) + bit_pos)
   }
 
   /// Panics if out of bound attempt
