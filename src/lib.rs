@@ -51,7 +51,7 @@
 mod bitmap;
 
 use bitmap::AcceleratedBitmap;
-use std::collections::HashMap;
+use std::{collections::HashMap, num::NonZero};
 use std::mem::MaybeUninit;
 
 /// The struct used to pool T.
@@ -74,7 +74,7 @@ impl<T> Pond<T> {
 
   #[must_use]
   fn reserve(&mut self) -> usize {
-    let idx = self.bitmap.first_free().unwrap_or(self.len());
+    let idx = self.bitmap.first_unset().unwrap_or(self.len());
     if idx >= self.len() { self.resize(idx + 1) }
     self.mark_reserved(idx);
     idx
@@ -86,7 +86,7 @@ impl<T> Pond<T> {
   pub fn new() -> Self {
     Self {
       data : Vec::new(),
-      bitmap: AcceleratedBitmap::new(3),
+      bitmap: AcceleratedBitmap::new(NonZero::new(3).unwrap()),
     }
   }
   
@@ -100,7 +100,7 @@ impl<T> Pond<T> {
 
   /// Returns the next index which will be assigned on a [Pond::insert] call. If you need to
   /// guarantee a specific index, use [Pond::write] instead.
-  pub fn next_index(&self) -> usize { self.bitmap.first_free().unwrap_or(self.len()) }
+  pub fn next_index(&self) -> usize { self.bitmap.first_unset().unwrap_or(self.len()) }
 
   /// Sets Pond to hold `size` elements. If size < self.len(), excess data will be truncated and dropped.
   pub fn resize(&mut self, size: usize) {
@@ -159,24 +159,15 @@ impl<T> Pond<T> {
   /// The hashmap returned can be used to remap your references to their new locations. (Key:Old, Value:New)
   /// 
   /// Slots at the back of memory will be placed in the first free slot, until the above condition is met.
-  /// 
-  // Note to self, figure out time complexity
   #[must_use]
   pub fn defrag(&mut self) -> HashMap<usize, usize> {
     let mut remapped = HashMap::new();
-    if self.len() == 0 { return remapped }
-    let mut full = self.len();
-    let mut last_full = full;
-    while let Some(free) = self.bitmap.first_free() {
-      for idx in (free .. last_full).rev() {
-        if self.bitmap.is_set(idx) { full = idx; break }
-      }
-      if full == last_full { break }
+    while let Some(free) = self.bitmap.first_unset() && let Some(full) = self.bitmap.last_set() {
+      if full < free { break }
       remapped.insert(full, free);
       self.data.swap(free, full);
       self.bitmap.set(full, false);
       self.bitmap.set(free, true);
-      last_full = full;
     }
     remapped
   }
@@ -185,7 +176,8 @@ impl<T> Pond<T> {
   #[must_use]
   pub fn trim(&mut self) -> HashMap<usize, usize> {
     let remap = self.defrag();
-    if let Some(first_free) = self.bitmap.first_free() { self.resize(first_free) }
+    // This is safe to do because we just made all data contiguous
+    self.resize(self.next_index());
     remap
   }
 
